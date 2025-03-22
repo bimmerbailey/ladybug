@@ -83,6 +83,9 @@ pub extern "c" fn zig_py_long_check(obj: *PyObject) c_int;
 pub extern "c" fn zig_py_tuple_check(obj: *PyObject) c_int;
 pub extern "c" fn zig_py_unicode_check(obj: *PyObject) c_int;
 
+// Object operations
+pub extern "c" fn PyObject_IsTrue(obj: *PyObject) c_int;
+
 // Bytes operations
 pub extern "c" fn PyBytes_AsStringAndSize(obj: *PyObject, buffer: *[*c]u8, length: *c_long) c_int;
 

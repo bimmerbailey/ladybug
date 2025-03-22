@@ -127,6 +127,12 @@ pub fn build(b: *std.Build) void {
     python_integration_test.linkSystemLibrary(python_lib_name);
     python_integration_test.linkLibC();
 
+    // Add C file for Python compatibility to the test
+    python_integration_test.addCSourceFile(.{
+        .file = b.path("include/py_compat.c"),
+        .flags = &.{},
+    });
+
     const run_python_tests = b.addRunArtifact(python_integration_test);
     const test_python_step = b.step("test-python", "Run Python integration tests");
     test_python_step.dependOn(&run_python_tests.step);

@@ -2,6 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const python = @import("python_wrapper");
 
+// Re-export the python module as 'c' for compatibility with tests
+pub const c = python;
+
 // Import ASGI protocol module - use the module name defined in build.zig
 const protocol = @import("protocol");
 

@@ -253,8 +253,8 @@ test "ASGI application message flow" {
     const thread_state = integration.c.PyEval_SaveThread();
 
     const call_thread = try std.Thread.spawn(.{}, struct {
-        fn run(app_obj: *integration.c.PyObject, scope_obj: *integration.c.PyObject, receive_obj: *integration.c.PyObject, send_obj: *integration.c.PyObject) void {
-            integration.c.PyEval_RestoreThread(thread_state);
+        fn run(app_obj: *integration.c.PyObject, scope_obj: *integration.c.PyObject, receive_obj: *integration.c.PyObject, send_obj: *integration.c.PyObject, thread_state_ptr: ?*anyopaque) void {
+            integration.c.PyEval_RestoreThread(thread_state_ptr);
             defer _ = integration.c.PyEval_SaveThread();
 
             // Call the application
@@ -263,7 +263,7 @@ test "ASGI application message flow" {
                 return;
             };
         }
-    }.run, .{ app.?, scope, receive, send });
+    }.run, .{ app.?, scope, receive, send, thread_state });
 
     // Push the request message to the queue
     var request_message = json.Value{
@@ -317,23 +317,23 @@ test "Load ASGI application" {
         std.debug.print("Skipping test_load_asgi_application: couldn't create args tuple\n", .{});
         return;
     }
-    defer integration.c.Py_DECREF(args);
+    defer decref(args.?);
 
     incref(py_path);
-    if (integration.c.PyTuple_SetItem(args, 0, py_path) < 0) {
+    if (integration.c.PyTuple_SetItem(args.?, 0, py_path) < 0) {
         std.debug.print("Skipping test_load_asgi_application: couldn't set tuple item\n", .{});
         return;
     }
 
-    const result = integration.c.PyObject_CallObject(py_exists_func, args);
+    const result = integration.c.PyObject_CallObject(py_exists_func, args.?);
     if (result == null) {
         std.debug.print("Skipping test_load_asgi_application: call to exists failed\n", .{});
         return;
     }
-    defer decref(result);
+    defer decref(result.?);
 
     // Check if file exists
-    const exists = integration.c.PyObject_IsTrue(result);
+    const exists = integration.c.PyObject_IsTrue(result.?);
     if (exists <= 0) {
         std.debug.print("Skipping test_load_asgi_application: test app not found at {s}\n", .{test_app_path});
         return;
