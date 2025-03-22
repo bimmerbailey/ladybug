@@ -22,41 +22,51 @@ This is a work in progress. The project is being developed through "vibe coding"
 
 ## Component Overview
 
-### Main Server Flow
+### Server Core
 
-- `main()`: Entry point that sets up the server based on CLI arguments
-- `runMaster()`: Manages worker processes when running in multi-worker mode
-- `runWorker()`: Handles the actual server work in a single process
-- `handleConnection()`: Processes incoming HTTP requests
+- `main()`: Entry point that parses CLI options and configures the server
+- `runMaster()`: Manages worker processes for multi-process deployment using a worker pool
+- `runWorker()`: Sets up and runs a single server process, initializes the Python interpreter
+- `handleConnection()`: Processes incoming HTTP requests in separate threads
+- `handleWebSocketConnection()`: Manages WebSocket connections and protocol upgrades
 
-### ASGI Communication
+### HTTP Implementation
 
-- `handleLifespan()`: Manages application startup/shutdown events
-- `callAsgiApplication()`: Calls the Python ASGI application with required parameters
-- `createHttpScope()`: Creates the HTTP scope dictionary for ASGI
-- `createWebSocketScope()`: Creates WebSocket scope for ASGI
-- `MessageQueue`: Handles message passing between server and application
-
-### Python Integration
-
-- `loadApplication()`: Loads the Python ASGI application from a module
-- `toPyString()/fromPyString()`: Convert between Zig and Python strings
-- `jsonToPyObject()/pyObjectToJson()`: Convert between JSON and Python objects
-- `createReceiveCallable()/createSendCallable()`: Create Python functions for ASGI interface
+- `http.Server`: Core HTTP server that binds to ports and accepts connections
+- `http.parseRequest()`: Parses raw HTTP requests into structured request objects
+- `http.Request`: Represents HTTP requests with methods, paths, headers, and bodies
+- `http.Response`: Represents HTTP responses with status codes, headers, and bodies
 
 ### WebSocket Support
 
-- `handleWebSocketConnection()`: Manages WebSocket connections
-- `handshake()`: Performs the WebSocket protocol handshake
-- `Connection.send()/Connection.receive()`: Send/receive WebSocket messages
+- `websocket.Connection`: Manages WebSocket connections with framing and masking
+- `websocket.Message`: Represents WebSocket messages of different types (text/binary/etc.)
+- `websocket.handshake()`: Implements the WebSocket protocol handshake
+- `websocket.Opcode`: Defines WebSocket frame operation codes
+
+### ASGI Protocol
+
+- `asgi.MessageQueue`: Thread-safe queue for communication between server and application
+- `asgi.createHttpScope()`: Creates the HTTP scope dictionary for ASGI applications
+- `asgi.createWebSocketScope()`: Creates WebSocket scope for ASGI applications
+- `asgi.createLifespanScope()`: Creates scopes for application lifecycle events
+- `asgi.handleLifespan()`: Manages application startup/shutdown protocol
+
+### Python Integration
+
+- `python.initialize()`: Sets up the Python interpreter
+- `python.loadApplication()`: Loads the Python ASGI application from module:app string
+- `python.callAsgiApplication()`: Invokes the ASGI application with appropriate arguments
+- `python.createPyDict()`: Converts Zig data structures to Python dictionaries
+- `python.toPyString()/fromPyString()`: Converts between Zig and Python strings
 
 ### Utilities
 
-- `Logger`: Provides logging functionality with different severity levels
-- `WorkerPool`: Manages worker processes for multi-process mode
-- `Options`: Handles command-line arguments and configuration
+- `utils.Logger`: Configurable logging with multiple severity levels and timestamps
+- `utils.WorkerPool`: Manages worker processes for multi-process deployments
+- `cli.Options`: Parses and manages command-line options with sensible defaults
 
-The architecture follows the ASGI specification, using Python integration to communicate with Python web frameworks while providing HTTP and WebSocket handling in Zig.
+The architecture follows the ASGI specification, providing a high-performance server implementation in Zig that can communicate with Python web frameworks like FastAPI, Django, and Starlette.
 
 ### **Estimated Speedup for FastAPI**
 
