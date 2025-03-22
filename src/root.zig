@@ -11,7 +11,7 @@ const testing = std.testing;
 pub const http = @import("http/server.zig");
 
 // ASGI protocol implementation
-pub const asgi = @import("asgi/protocol.zig");
+pub const asgi = @import("protocol");
 
 // WebSocket support
 pub const websocket = @import("websocket/server.zig");

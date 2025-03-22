@@ -1,8 +1,32 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const c = @cImport({
-    @cInclude("Python.h");
-});
+const python = @import("python_wrapper");
+
+// Import ASGI protocol module - use the module name defined in build.zig
+const protocol = @import("protocol");
+
+// Export the PyObject type for external use
+pub const PyObject = python.PyObject;
+
+/// Workaround functions to access Python constants safely
+fn getPyNone() *python.PyObject {
+    return python.getPyNone();
+}
+
+/// Get True from Python
+fn getPyTrue() *python.PyObject {
+    return python.getPyTrue();
+}
+
+/// Get False from Python
+fn getPyFalse() *python.PyObject {
+    return python.getPyFalse();
+}
+
+/// Workaround to make Python bool values in Zig
+fn getPyBool(value: bool) *python.PyObject {
+    return if (value) python.getPyTrue() else python.getPyFalse();
+}
 
 /// Python errors
 pub const PythonError = error{
@@ -19,9 +43,9 @@ pub const PythonError = error{
 
 /// Initialize the Python interpreter
 pub fn initialize() !void {
-    if (c.Py_IsInitialized() == 0) {
-        c.Py_Initialize();
-        if (c.Py_IsInitialized() == 0) {
+    if (python.Py_IsInitialized() == 0) {
+        python.Py_Initialize();
+        if (python.Py_IsInitialized() == 0) {
             return PythonError.InitFailed;
         }
     }
@@ -29,85 +53,85 @@ pub fn initialize() !void {
 
 /// Finalize the Python interpreter
 pub fn finalize() void {
-    if (c.Py_IsInitialized() != 0) {
-        c.Py_Finalize();
+    if (python.Py_IsInitialized() != 0) {
+        python.Py_Finalize();
     }
 }
 
 /// Import a Python module
-pub fn importModule(module_name: []const u8) !*c.PyObject {
+pub fn importModule(module_name: []const u8) !*python.PyObject {
     const py_name = try toPyString(module_name);
-    defer c.Py_DECREF(py_name);
+    defer decref(py_name);
 
-    const module = c.PyImport_Import(py_name);
+    const module = python.PyImport_Import(py_name);
     if (module == null) {
         handlePythonError();
         return PythonError.ModuleNotFound;
     }
 
-    return module;
+    return module.?;
 }
 
 /// Get an attribute from a Python object
-pub fn getAttribute(object: *c.PyObject, attr_name: []const u8) !*c.PyObject {
+pub fn getAttribute(object: *python.PyObject, attr_name: []const u8) !*python.PyObject {
     const py_name = try toPyString(attr_name);
-    defer c.Py_DECREF(py_name);
+    defer decref(py_name);
 
-    const attr = c.PyObject_GetAttr(object, py_name);
+    const attr = python.PyObject_GetAttr(object, py_name);
     if (attr == null) {
         handlePythonError();
         return PythonError.AttributeNotFound;
     }
 
-    return attr;
+    return attr.?;
 }
 
 /// Convert a Zig string to a Python string
-pub fn toPyString(string: []const u8) !*c.PyObject {
-    const py_string = c.PyUnicode_FromStringAndSize(string.ptr, @intCast(string.len));
+pub fn toPyString(string: []const u8) !*python.PyObject {
+    const py_string = python.PyUnicode_FromStringAndSize(string.ptr, @intCast(string.len));
     if (py_string == null) {
         handlePythonError();
         return PythonError.ValueError;
     }
 
-    return py_string;
+    return py_string.?;
 }
 
 /// Convert a Python string to a Zig string
-pub fn fromPyString(allocator: Allocator, py_string: *c.PyObject) ![]u8 {
-    if (c.PyUnicode_Check(py_string) == 0) {
+pub fn fromPyString(allocator: Allocator, py_string: *python.PyObject) ![]u8 {
+    if (python.PyUnicode_Check(py_string) == 0) {
         return PythonError.TypeError;
     }
 
-    const utf8 = c.PyUnicode_AsUTF8(py_string);
+    const utf8 = python.PyUnicode_AsUTF8(py_string);
     if (utf8 == null) {
         handlePythonError();
         return PythonError.ValueError;
     }
 
-    return try allocator.dupe(u8, std.mem.span(utf8));
+    return try allocator.dupe(u8, std.mem.span(utf8.?));
 }
 
 /// Handle Python exceptions by printing them and clearing the error
 fn handlePythonError() void {
-    if (c.PyErr_Occurred() != null) {
-        c.PyErr_Print();
-        c.PyErr_Clear();
+    if (python.PyErr_Occurred() != null) {
+        python.PyErr_Print();
+        python.PyErr_Clear();
     }
 }
 
 /// Load a Python ASGI application
-pub fn loadApplication(module_path: []const u8, app_name: []const u8) !*c.PyObject {
+pub fn loadApplication(module_path: []const u8, app_name: []const u8) !*python.PyObject {
     // Import the module
     const module = try importModule(module_path);
-    defer c.Py_DECREF(module);
+    defer decref(module);
 
     // Get the application attribute
     const app = try getAttribute(module, app_name);
 
     // Ensure it's callable
-    if (c.PyCallable_Check(app) == 0) {
-        c.Py_DECREF(app);
+    if (python.PyCallable_Check(app) == 0) {
+        decref(app);
         return PythonError.InvalidApplication;
     }
 
@@ -115,12 +139,12 @@ pub fn loadApplication(module_path: []const u8, app_name: []const u8) !*c.PyObje
 }
 
 /// Create a Python dict from a JSON object
-pub fn createPyDict(allocator: Allocator, json_obj: std.json.Value) !*c.PyObject {
+pub fn createPyDict(allocator: Allocator, json_obj: std.json.Value) !*python.PyObject {
     if (json_obj != .object) {
         return PythonError.TypeError;
     }
 
-    const dict = c.PyDict_New();
+    const dict = python.PyDict_New();
     if (dict == null) {
         handlePythonError();
         return PythonError.RuntimeError;
@@ -129,58 +153,55 @@ pub fn createPyDict(allocator: Allocator, json_obj: std.json.Value) !*c.PyObject
     var it = json_obj.object.iterator();
     while (it.next()) |entry| {
         const key = try toPyString(entry.key_ptr.*);
-        defer c.Py_DECREF(key);
+        defer decref(key);
 
         const value = try jsonToPyObject(allocator, entry.value_ptr.*);
-        defer c.Py_DECREF(value);
+        defer decref(value);
 
-        if (c.PyDict_SetItem(dict, key, value) < 0) {
-            c.Py_DECREF(dict);
+        if (python.PyDict_SetItem(dict.?, key, value) < 0) {
+            decref(dict.?);
             handlePythonError();
             return PythonError.RuntimeError;
         }
     }
 
-    return dict;
+    return dict.?;
 }
 
 /// Convert a JSON value to a Python object
-pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*c.PyObject {
+pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*python.PyObject {
     switch (json_value) {
         .null => {
-            c.Py_INCREF(c.Py_None);
-            return c.Py_None;
+            // Get Python None using our C shim
+            const none = python.getPyNone();
+            python.incref(none);
+            return none;
         },
         .bool => |b| {
-            if (b) {
-                c.Py_INCREF(c.Py_True);
-                return c.Py_True;
-            } else {
-                c.Py_INCREF(c.Py_False);
-                return c.Py_False;
-            }
+            // Use PyBool_FromLong directly
+            return getPyBool(b);
         },
         .integer => |i| {
-            const py_int = c.PyLong_FromLongLong(i);
+            const py_int = python.PyLong_FromLongLong(i);
             if (py_int == null) {
                 handlePythonError();
                 return PythonError.ValueError;
             }
-            return py_int;
+            return py_int.?;
         },
         .float => |f| {
-            const py_float = c.PyFloat_FromDouble(f);
+            const py_float = python.PyFloat_FromDouble(f);
             if (py_float == null) {
                 handlePythonError();
                 return PythonError.ValueError;
             }
-            return py_float;
+            return py_float.?;
         },
         .string => |s| {
             return try toPyString(s);
         },
         .array => |arr| {
-            const py_list = c.PyList_New(@intCast(arr.items.len));
+            const py_list = python.PyList_New(@intCast(arr.items.len));
             if (py_list == null) {
                 handlePythonError();
                 return PythonError.RuntimeError;
@@ -189,17 +210,17 @@ pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*c.PyOb
             for (arr.items, 0..) |item, i| {
                 const py_item = try jsonToPyObject(allocator, item);
                 // PyList_SetItem steals a reference, so no DECREF
-                if (c.PyList_SetItem(py_list, @intCast(i), py_item) < 0) {
-                    c.Py_DECREF(py_list);
+                if (python.PyList_SetItem(py_list.?, @intCast(i), py_item) < 0) {
+                    decref(py_list.?);
                     handlePythonError();
                     return PythonError.RuntimeError;
                 }
             }
 
-            return py_list;
+            return py_list.?;
         },
         .object => |obj| {
-            const py_dict = c.PyDict_New();
+            const py_dict = python.PyDict_New();
             if (py_dict == null) {
                 handlePythonError();
                 return PythonError.RuntimeError;
@@ -208,59 +229,83 @@ pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*c.PyOb
             var it = obj.iterator();
             while (it.next()) |entry| {
                 const key = try toPyString(entry.key_ptr.*);
-                defer c.Py_DECREF(key);
+                defer decref(key);
 
                 const value = try jsonToPyObject(allocator, entry.value_ptr.*);
-                defer c.Py_DECREF(value);
+                defer decref(value);
 
-                if (c.PyDict_SetItem(py_dict, key, value) < 0) {
-                    c.Py_DECREF(py_dict);
+                if (python.PyDict_SetItem(py_dict.?, key, value) < 0) {
+                    decref(py_dict.?);
                     handlePythonError();
                     return PythonError.RuntimeError;
                 }
             }
 
-            return py_dict;
+            return py_dict.?;
+        },
+        .number_string => |s| {
+            // Try to convert string to integer or float
+            if (std.fmt.parseInt(i64, s, 10)) |int_val| {
+                const py_int = python.PyLong_FromLongLong(int_val);
+                if (py_int == null) {
+                    handlePythonError();
+                    return PythonError.ValueError;
+                }
+                return py_int.?;
+            } else |_| {
+                if (std.fmt.parseFloat(f64, s)) |float_val| {
+                    const py_float = python.PyFloat_FromDouble(float_val);
+                    if (py_float == null) {
+                        handlePythonError();
+                        return PythonError.ValueError;
+                    }
+                    return py_float.?;
+                } else |_| {
+                    // If parsing fails, return as a string
+                    return try toPyString(s);
+                }
+            }
         },
     }
 }
 
 /// Convert a Python object to a JSON value
-pub fn pyObjectToJson(allocator: Allocator, py_obj: *c.PyObject) !std.json.Value {
-    if (c.PyBool_Check(py_obj) != 0) {
-        return std.json.Value{ .bool = py_obj == c.Py_True };
-    } else if (c.PyLong_Check(py_obj) != 0) {
-        const value = c.PyLong_AsLongLong(py_obj);
-        if (value == -1 and c.PyErr_Occurred() != null) {
+pub fn pyObjectToJson(allocator: Allocator, py_obj: *python.PyObject) !std.json.Value {
+    if (python.PyBool_Check(py_obj) != 0) {
+        const py_true = python.getPyTrue();
+        return std.json.Value{ .bool = py_obj == py_true };
+    } else if (python.PyLong_Check(py_obj) != 0) {
+        const value = python.PyLong_AsLongLong(py_obj);
+        if (value == -1 and python.PyErr_Occurred() != null) {
             handlePythonError();
             return PythonError.ValueError;
         }
         return std.json.Value{ .integer = value };
-    } else if (c.PyFloat_Check(py_obj) != 0) {
-        const value = c.PyFloat_AsDouble(py_obj);
-        if (value == -1.0 and c.PyErr_Occurred() != null) {
+    } else if (python.PyFloat_Check(py_obj) != 0) {
+        const value = python.PyFloat_AsDouble(py_obj);
+        if (value == -1.0 and python.PyErr_Occurred() != null) {
             handlePythonError();
             return PythonError.ValueError;
         }
         return std.json.Value{ .float = value };
-    } else if (c.PyUnicode_Check(py_obj) != 0) {
+    } else if (python.PyUnicode_Check(py_obj) != 0) {
         const str = try fromPyString(allocator, py_obj);
         return std.json.Value{ .string = str };
-    } else if (c.PyBytes_Check(py_obj) != 0) {
+    } else if (python.PyBytes_Check(py_obj) != 0) {
         var size: c_long = undefined;
         var bytes_ptr: [*c]u8 = undefined;
-        const result = c.PyBytes_AsStringAndSize(py_obj, &bytes_ptr, &size);
+        const result = python.PyBytes_AsStringAndSize(py_obj, &bytes_ptr, &size);
         if (result < 0) {
             handlePythonError();
             return PythonError.ValueError;
         }
         const data = try allocator.dupe(u8, bytes_ptr[0..@intCast(size)]);
         return std.json.Value{ .string = data };
-    } else if (c.PyList_Check(py_obj) != 0 or c.PyTuple_Check(py_obj) != 0) {
-        const size = if (c.PyList_Check(py_obj) != 0)
-            c.PyList_Size(py_obj)
+    } else if (python.PyList_Check(py_obj) != 0 or python.PyTuple_Check(py_obj) != 0) {
+        const size = if (python.PyList_Check(py_obj) != 0)
+            python.PyList_Size(py_obj)
         else
-            c.PyTuple_Size(py_obj);
+            python.PyTuple_Size(py_obj);
 
         if (size < 0) {
             handlePythonError();
@@ -273,37 +318,46 @@ pub fn pyObjectToJson(allocator: Allocator, py_obj: *c.PyObject) !std.json.Value
 
         var i: c_long = 0;
         while (i < size) : (i += 1) {
-            const item = if (c.PyList_Check(py_obj) != 0)
-                c.PyList_GetItem(py_obj, i)
+            const item = if (python.PyList_Check(py_obj) != 0)
+                python.PyList_GetItem(py_obj, i)
             else
-                c.PyTuple_GetItem(py_obj, i);
+                python.PyTuple_GetItem(py_obj, i);
 
             if (item == null) {
-                array.deinit(allocator);
+                // Free the array items we've already added - manually free each item
+                for (array.array.items) |*json_item| {
+                    switch (json_item.*) {
+                        .string => |s| allocator.free(s),
+                        .array => |*a| a.deinit(),
+                        .object => |*o| o.deinit(),
+                        else => {},
+                    }
+                }
+                array.array.deinit();
                 handlePythonError();
                 return PythonError.RuntimeError;
             }
 
             // These are borrowed references, no DECREF needed
-            const json_item = try pyObjectToJson(allocator, item);
+            const json_item = try pyObjectToJson(allocator, item.?);
             try array.array.append(json_item);
         }
 
         return array;
-    } else if (c.PyDict_Check(py_obj) != 0) {
+    } else if (python.PyDict_Check(py_obj) != 0) {
         var object = std.json.Value{
             .object = std.json.ObjectMap.init(allocator),
         };
 
-        const pos = 0;
-        var key: ?*c.PyObject = undefined;
-        var value: ?*c.PyObject = undefined;
+        var pos: c_long = 0;
+        var key: ?*python.PyObject = undefined;
+        var value: ?*python.PyObject = undefined;
 
-        while (c.PyDict_Next(py_obj, &pos, &key, &value) != 0) {
+        while (python.PyDict_Next(py_obj, @ptrCast(&pos), &key, &value) != 0) {
             if (key == null or value == null) continue;
 
-            if (c.PyUnicode_Check(key.?) == 0) {
-                object.deinit(allocator);
+            if (python.PyUnicode_Check(key.?) == 0) {
+                protocol.jsonValueDeinit(object, allocator);
                 return PythonError.TypeError;
             }
 
@@ -314,310 +368,336 @@ pub fn pyObjectToJson(allocator: Allocator, py_obj: *c.PyObject) !std.json.Value
         }
 
         return object;
-    } else if (py_obj == c.Py_None) {
+    } else if (python.isNone(py_obj)) {
         return std.json.Value{ .null = {} };
     } else {
         return PythonError.TypeError;
     }
 }
 
+/// Function to get Python None for callback function
+fn getNoneForCallback() ?*python.PyObject {
+    const none = python.getPyNone();
+    python.incref(none);
+    return none;
+}
+
 /// Function to be called from Python's receive() callable
-fn pyReceiveCallback(self: *c.PyObject, args: *c.PyObject) callconv(.C) ?*c.PyObject {
+fn pyReceiveCallback(self: *python.PyObject, _: *python.PyObject) callconv(.C) ?*python.PyObject {
     // Expecting self to be a pointer to a Message Queue
-    if (c.PyCapsule_CheckExact(self) == 0) {
-        _ = c.PyErr_SetString(c.PyExc_TypeError, "Expected a capsule as self");
+    if (python.PyCapsule_CheckExact(self) == 0) {
+        _ = python.PyErr_SetString(python.PyExc_TypeError, "Expected a capsule as self");
         return null;
     }
 
-    const queue_ptr = c.PyCapsule_GetPointer(self, "MessageQueue");
+    const queue_ptr = python.PyCapsule_GetPointer(self, "MessageQueue");
     if (queue_ptr == null) {
         return null;
     }
 
-    const queue = @ptrCast(*@import("../asgi/protocol.zig").MessageQueue, @alignCast(@alignOf(*@import("../asgi/protocol.zig").MessageQueue), queue_ptr));
+    // Cast with alignment correction
+    const queue = @as(*protocol.MessageQueue, @alignCast(@ptrCast(queue_ptr)));
 
     // Create async task for awaiting
-    const asyncio = c.PyImport_ImportModule("asyncio");
+    const asyncio = python.PyImport_ImportModule("asyncio");
     if (asyncio == null) {
-        _ = c.PyErr_SetString(c.PyExc_ImportError, "Failed to import asyncio");
+        _ = python.PyErr_SetString(python.PyExc_ImportError, "Failed to import asyncio");
         return null;
     }
-    defer c.Py_DECREF(asyncio);
+    defer decref(asyncio.?);
 
-    const create_task = c.PyObject_GetAttrString(asyncio, "create_task");
+    const create_task = python.PyObject_GetAttrString(asyncio.?, "create_task");
     if (create_task == null) {
-        _ = c.PyErr_SetString(c.PyExc_AttributeError, "Failed to get create_task");
+        _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get create_task");
         return null;
     }
-    defer c.Py_DECREF(create_task);
+    defer decref(create_task.?);
 
     // Create a Future to handle asynchronous receive
-    const future_type = c.PyObject_GetAttrString(asyncio, "Future");
+    const future_type = python.PyObject_GetAttrString(asyncio.?, "Future");
     if (future_type == null) {
-        _ = c.PyErr_SetString(c.PyExc_AttributeError, "Failed to get Future");
+        _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get Future");
         return null;
     }
-    defer c.Py_DECREF(future_type);
+    defer decref(future_type.?);
 
-    const future = c.PyObject_CallObject(future_type, null);
+    const future = python.PyObject_CallObject(future_type.?, null);
     if (future == null) {
         return null;
     }
 
     // Spawn a separate thread to wait for the message
-    const thread_state = c.PyEval_SaveThread();
+    const thread_state = python.PyEval_SaveThread();
 
     // Receive message (this will block until a message is available)
     const message = queue.receive() catch {
-        c.PyEval_RestoreThread(thread_state);
-        _ = c.PyErr_SetString(c.PyExc_RuntimeError, "Failed to receive message from queue");
-        c.Py_DECREF(future);
+        python.PyEval_RestoreThread(thread_state);
+        _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to receive message from queue");
+        decref(future.?);
         return null;
     };
 
-    c.PyEval_RestoreThread(thread_state);
+    python.PyEval_RestoreThread(thread_state);
+
+    // Set the result on the future
+    const set_result = python.PyObject_GetAttrString(future.?, "set_result");
+    if (set_result == null) {
+        decref(future.?);
+        return null;
+    }
+    defer decref(set_result.?);
 
     // Convert to Python dict
     const gpa = std.heap.c_allocator;
     const py_message = jsonToPyObject(gpa, message) catch {
-        _ = c.PyErr_SetString(c.PyExc_RuntimeError, "Failed to convert message to Python object");
-        c.Py_DECREF(future);
+        _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to convert message to Python object");
+        decref(future.?);
         return null;
     };
 
     // Set the result on the future
-    const set_result = c.PyObject_GetAttrString(future, "set_result");
-    if (set_result == null) {
-        c.Py_DECREF(py_message);
-        c.Py_DECREF(future);
-        return null;
-    }
-    defer c.Py_DECREF(set_result);
-
-    const result = c.PyObject_CallFunctionObjArgs(set_result, py_message, null);
-    c.Py_DECREF(py_message);
+    const result = python.zig_call_function_with_arg(set_result.?, py_message);
+    decref(py_message);
 
     if (result == null) {
-        c.Py_DECREF(future);
+        decref(future.?);
         return null;
     }
-    c.Py_DECREF(result);
+    decref(result.?);
 
     return future;
 }
 
 /// Function to be called from Python's send() callable
-fn pySendCallback(self: *c.PyObject, args: *c.PyObject) callconv(.C) ?*c.PyObject {
+fn pySendCallback(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?*python.PyObject {
     // Ensure we have exactly one argument
-    if (c.PyTuple_Size(args) != 1) {
-        _ = c.PyErr_SetString(c.PyExc_TypeError, "Expected exactly one argument");
+    if (python.PyTuple_Size(args) != 1) {
+        _ = python.PyErr_SetString(python.PyExc_TypeError, "Expected exactly one argument");
         return null;
     }
 
     // Expecting self to be a pointer to a Message Queue
-    if (c.PyCapsule_CheckExact(self) == 0) {
-        _ = c.PyErr_SetString(c.PyExc_TypeError, "Expected a capsule as self");
+    if (python.PyCapsule_CheckExact(self) == 0) {
+        _ = python.PyErr_SetString(python.PyExc_TypeError, "Expected a capsule as self");
         return null;
     }
 
-    const queue_ptr = c.PyCapsule_GetPointer(self, "MessageQueue");
+    const queue_ptr = python.PyCapsule_GetPointer(self, "MessageQueue");
     if (queue_ptr == null) {
         return null;
     }
 
-    const queue = @ptrCast(*@import("../asgi/protocol.zig").MessageQueue, @alignCast(@alignOf(*@import("../asgi/protocol.zig").MessageQueue), queue_ptr));
+    // Cast with alignment correction
+    const queue = @as(*protocol.MessageQueue, @alignCast(@ptrCast(queue_ptr)));
 
     // Get the message argument
-    const message = c.PyTuple_GetItem(args, 0);
+    const message = python.PyTuple_GetItem(args, 0);
     if (message == null) {
         return null;
     }
 
     // Convert to JSON
     const gpa = std.heap.c_allocator;
-    const json_message = pyObjectToJson(gpa, message) catch {
-        _ = c.PyErr_SetString(c.PyExc_RuntimeError, "Failed to convert message to JSON");
+    const json_message = pyObjectToJson(gpa, message.?) catch {
+        _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to convert message to JSON");
         return null;
     };
 
     // Create async task for awaiting
-    const asyncio = c.PyImport_ImportModule("asyncio");
+    const asyncio = python.PyImport_ImportModule("asyncio");
     if (asyncio == null) {
-        _ = c.PyErr_SetString(c.PyExc_ImportError, "Failed to import asyncio");
+        _ = python.PyErr_SetString(python.PyExc_ImportError, "Failed to import asyncio");
         return null;
     }
-    defer c.Py_DECREF(asyncio);
+    defer decref(asyncio.?);
 
     // Create a Future to handle asynchronous send
-    const future_type = c.PyObject_GetAttrString(asyncio, "Future");
+    const future_type = python.PyObject_GetAttrString(asyncio.?, "Future");
     if (future_type == null) {
-        _ = c.PyErr_SetString(c.PyExc_AttributeError, "Failed to get Future");
+        _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get Future");
         return null;
     }
-    defer c.Py_DECREF(future_type);
+    defer decref(future_type.?);
 
-    const future = c.PyObject_CallObject(future_type, null);
+    const future = python.PyObject_CallObject(future_type.?, null);
     if (future == null) {
         return null;
     }
 
     // Push the message to the queue
     queue.push(json_message) catch {
-        _ = c.PyErr_SetString(c.PyExc_RuntimeError, "Failed to push message to queue");
-        c.Py_DECREF(future);
+        _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to push message to queue");
+        decref(future.?);
         return null;
     };
 
     // Set the result on the future to None (indicating success)
-    const set_result = c.PyObject_GetAttrString(future, "set_result");
+    const set_result = python.PyObject_GetAttrString(future.?, "set_result");
     if (set_result == null) {
-        c.Py_DECREF(future);
+        decref(future.?);
         return null;
     }
-    defer c.Py_DECREF(set_result);
+    defer decref(set_result.?);
 
-    c.Py_INCREF(c.Py_None);
-    const result = c.PyObject_CallFunctionObjArgs(set_result, c.Py_None, null);
-    if (result == null) {
-        c.Py_DECREF(future);
+    // Get None for the result
+    const none = getNoneForCallback();
+    if (none == null) {
+        decref(future.?);
         return null;
     }
-    c.Py_DECREF(result);
+
+    const result = python.zig_call_function_with_arg(set_result.?, none.?);
+    decref(none.?);
+
+    if (result == null) {
+        decref(future.?);
+        return null;
+    }
+    decref(result.?);
 
     return future;
 }
 
 /// Create a Python receive callable for ASGI
-pub fn createReceiveCallable(queue: *@import("../asgi/protocol.zig").MessageQueue) !*c.PyObject {
+pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     // Create capsule to hold the queue pointer
-    const capsule = c.PyCapsule_New(queue, "MessageQueue", null);
+    const capsule = python.PyCapsule_New(queue, "MessageQueue", null);
     if (capsule == null) {
         handlePythonError();
         return PythonError.RuntimeError;
     }
 
     // Create method definition
-    const method_def = c.PyMethodDef{
+    var method_def = python.PyMethodDef{
         .ml_name = "receive",
-        .ml_meth = @ptrCast(c.PyCFunction, pyReceiveCallback),
-        .ml_flags = c.METH_NOARGS,
+        .ml_meth = @ptrCast(&pyReceiveCallback),
+        .ml_flags = python.METH_NOARGS,
         .ml_doc = "ASGI receive callable",
     };
 
     // Create function object for receive
-    const py_func = c.PyCFunction_New(&method_def, capsule);
+    const py_func = python.PyCFunction_New(&method_def, capsule);
 
     if (py_func == null) {
-        c.Py_DECREF(capsule);
+        decref(capsule.?);
         handlePythonError();
         return PythonError.RuntimeError;
     }
 
-    return py_func;
+    return py_func.?;
 }
 
 /// Create a Python send callable for ASGI
-pub fn createSendCallable(queue: *@import("../asgi/protocol.zig").MessageQueue) !*c.PyObject {
+pub fn createSendCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     // Create capsule to hold the queue pointer
-    const capsule = c.PyCapsule_New(queue, "MessageQueue", null);
+    const capsule = python.PyCapsule_New(queue, "MessageQueue", null);
     if (capsule == null) {
         handlePythonError();
         return PythonError.RuntimeError;
     }
 
     // Create method definition
-    const method_def = c.PyMethodDef{
+    var method_def = python.PyMethodDef{
         .ml_name = "send",
-        .ml_meth = @ptrCast(c.PyCFunction, pySendCallback),
-        .ml_flags = c.METH_VARARGS,
+        .ml_meth = @ptrCast(&pySendCallback),
+        .ml_flags = python.METH_VARARGS,
         .ml_doc = "ASGI send callable",
     };
 
     // Create function object for send
-    const py_func = c.PyCFunction_New(&method_def, capsule);
+    const py_func = python.PyCFunction_New(&method_def, capsule);
 
     if (py_func == null) {
-        c.Py_DECREF(capsule);
+        decref(capsule.?);
         handlePythonError();
         return PythonError.RuntimeError;
     }
 
-    return py_func;
+    return py_func.?;
 }
 
 /// Call an ASGI application with scope, receive, and send
-pub fn callAsgiApplication(app: *c.PyObject, scope: *c.PyObject, receive: *c.PyObject, send: *c.PyObject) !void {
+pub fn callAsgiApplication(app: *python.PyObject, scope: *python.PyObject, receive: *python.PyObject, send: *python.PyObject) !void {
     // Create arguments tuple (app(scope, receive, send))
-    const args = c.PyTuple_New(3);
+    const args = python.PyTuple_New(3);
     if (args == null) {
         handlePythonError();
         return PythonError.RuntimeError;
     }
-    defer c.Py_DECREF(args);
+    defer decref(args.?);
 
     // Incref to counteract the stolen references
-    c.Py_INCREF(scope);
-    c.Py_INCREF(receive);
-    c.Py_INCREF(send);
+    python.incref(scope);
+    python.incref(receive);
+    python.incref(send);
 
-    if (c.PyTuple_SetItem(args, 0, scope) < 0 or
-        c.PyTuple_SetItem(args, 1, receive) < 0 or
-        c.PyTuple_SetItem(args, 2, send) < 0)
+    if (python.PyTuple_SetItem(args.?, 0, scope) < 0 or
+        python.PyTuple_SetItem(args.?, 1, receive) < 0 or
+        python.PyTuple_SetItem(args.?, 2, send) < 0)
     {
         handlePythonError();
         return PythonError.RuntimeError;
     }
 
     // Call the application
-    const result = c.PyObject_Call(app, args, null);
+    const result = python.PyObject_Call(app, args.?, null);
     if (result == null) {
         handlePythonError();
         return PythonError.CallFailed;
     }
 
     // Handle coroutine case (async def app)
-    if (c.PyCoro_CheckExact(result) != 0) {
+    if (python.PyCoro_CheckExact(result.?) != 0) {
         // We need to run this coroutine - import asyncio
-        const asyncio = c.PyImport_ImportModule("asyncio");
+        const asyncio = python.PyImport_ImportModule("asyncio");
         if (asyncio == null) {
-            c.Py_DECREF(result);
+            decref(result.?);
             handlePythonError();
             return PythonError.RuntimeError;
         }
-        defer c.Py_DECREF(asyncio);
+        defer decref(asyncio.?);
 
         // Get asyncio.run
-        const run_func = c.PyObject_GetAttrString(asyncio, "run");
+        const run_func = python.PyObject_GetAttrString(asyncio.?, "run");
         if (run_func == null) {
-            c.Py_DECREF(result);
+            decref(result.?);
             handlePythonError();
             return PythonError.RuntimeError;
         }
-        defer c.Py_DECREF(run_func);
+        defer decref(run_func.?);
 
         // Run the coroutine
-        const run_args = c.PyTuple_New(1);
+        const run_args = python.PyTuple_New(1);
         if (run_args == null) {
-            c.Py_DECREF(result);
+            decref(result.?);
             handlePythonError();
             return PythonError.RuntimeError;
         }
-        defer c.Py_DECREF(run_args);
+        defer decref(run_args.?);
 
         // PyTuple_SetItem steals a reference
-        if (c.PyTuple_SetItem(run_args, 0, result) < 0) {
-            c.Py_DECREF(result);
+        if (python.PyTuple_SetItem(run_args.?, 0, result.?) < 0) {
+            decref(result.?);
             handlePythonError();
             return PythonError.RuntimeError;
         }
 
-        const run_result = c.PyObject_Call(run_func, run_args, null);
+        const run_result = python.PyObject_Call(run_func.?, run_args.?, null);
         if (run_result == null) {
             handlePythonError();
             return PythonError.CallFailed;
         }
-        c.Py_DECREF(run_result);
+        decref(run_result.?);
     } else {
-        c.Py_DECREF(result);
+        decref(result.?);
     }
+}
+
+// Helper function to replace all Py_INCREF and Py_DECREF calls throughout the file
+pub fn incref(obj: *python.PyObject) void {
+    python.incref(obj);
+}
+
+pub fn decref(obj: *python.PyObject) void {
+    python.decref(obj);
 }
