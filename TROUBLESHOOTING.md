@@ -24,14 +24,15 @@ This document addresses common issues that might occur when setting up or runnin
 
 2. Update the build.zig file to include the correct path to Python headers:
 
-   ```zig
-   exe.addIncludePath("/usr/include/python3.x"); // Replace x with your Python version
-   exe.linkSystemLibrary("python3.x");
-   ```
+```zig
+exe.addIncludePath("/usr/include/python3.x"); // Replace x with your Python version
+exe.linkSystemLibrary("python3.x");
+```
 
 #### Python Function Signature Errors
 
 **Error**:
+
 ```
 expected 1 argument, found 2
 ```
@@ -65,13 +66,14 @@ error: library not found for -lpython3.x
 1. Install Python development libraries
 2. Add the library path to build.zig:
 
-   ```zig
-   exe.addLibraryPath("/usr/lib/python3.x/config-3.x-xxx-linux-gnu");
-   ```
+```zig
+exe.addLibraryPath("/usr/lib/python3.x/config-3.x-xxx-linux-gnu");
+```
 
 ### Signal Handler Issues
 
 **Error**:
+
 Signal handlers not working correctly or compiler warnings.
 
 **Fix**: ✅ FIXED
@@ -103,9 +105,9 @@ Error loading ASGI application: ModuleNotFound
 1. Make sure the module name is correct
 2. Ensure the module is in the Python path:
 
-   ```bash
-   export PYTHONPATH=/path/to/your/app:$PYTHONPATH
-   ```
+```bash
+export PYTHONPATH=/path/to/your/app:$PYTHONPATH
+```
 
 ### WebSocket Connection Issues
 
