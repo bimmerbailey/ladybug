@@ -29,7 +29,7 @@ pub const Server = struct {
         if (self.running) return;
 
         const address = try std.net.Address.parseIp(self.config.host, self.config.port);
-        self.listener = try address.listen(.{ .backlog = self.config.backlog });
+        self.listener = try address.listen(.{ .reuse_address = true });
         self.running = true;
 
         std.debug.print("HTTP server listening on http://{s}:{d}\n", .{ self.config.host, self.config.port });
@@ -39,7 +39,7 @@ pub const Server = struct {
     pub fn stop(self: *Server) void {
         if (!self.running) return;
 
-        if (self.listener) |listener| {
+        if (self.listener) |*listener| {
             listener.deinit();
             self.listener = null;
         }
@@ -84,21 +84,23 @@ pub const Request = struct {
     /// Parse a raw HTTP request into a Request object
     pub fn parse(allocator: Allocator, raw_request: []const u8) !Request {
         // Simple parsing - in a real impl this would be more robust
-        var lines = std.mem.split(u8, raw_request, "\r\n");
+        var lines = std.mem.splitSequence(u8, raw_request, "\r\n");
 
         // Parse request line
         const request_line = lines.next() orelse return error.InvalidRequest;
-        var parts = std.mem.split(u8, request_line, " ");
+        var parts = std.mem.splitScalar(u8, request_line, ' ');
 
         const method = try allocator.dupe(u8, parts.next() orelse return error.InvalidMethod);
 
         // Parse path and query
         const raw_path = parts.next() orelse return error.InvalidPath;
-        var path_parts = std.mem.split(u8, raw_path, "?");
+        var path_parts = std.mem.splitScalar(u8, raw_path, '?');
         const path = try allocator.dupe(u8, path_parts.next() orelse return error.InvalidPath);
         const query = if (path_parts.next()) |q| try allocator.dupe(u8, q) else null;
 
-        const version = try allocator.dupe(u8, parts.next() orelse return error.InvalidVersion);
+        // Get the HTTP version (remove any trailing whitespace)
+        const version_raw = parts.next() orelse return error.InvalidVersion;
+        const version = try allocator.dupe(u8, std.mem.trim(u8, version_raw, &std.ascii.whitespace));
 
         // Parse headers
         var headers = std.StringHashMap([]const u8).init(allocator);
@@ -106,9 +108,15 @@ pub const Request = struct {
         while (lines.next()) |line| {
             if (line.len == 0) break; // End of headers
 
-            var header_parts = std.mem.split(u8, line, ": ");
+            var header_parts = std.mem.splitScalar(u8, line, ':');
             const name = try allocator.dupe(u8, header_parts.next() orelse continue);
-            const value = try allocator.dupe(u8, header_parts.next() orelse continue);
+
+            var value_raw = header_parts.next() orelse continue;
+            // Trim leading space if present
+            if (value_raw.len > 0 and value_raw[0] == ' ') {
+                value_raw = value_raw[1..];
+            }
+            const value = try allocator.dupe(u8, value_raw);
 
             try headers.put(name, value);
         }
@@ -237,7 +245,7 @@ pub const Response = struct {
 pub const HandlerFn = fn (allocator: Allocator, request: Request, response: *Response) anyerror!void;
 
 /// Get the text representation of an HTTP status code
-fn statusText(status: u16) []const u8 {
+pub fn statusText(status: u16) []const u8 {
     return switch (status) {
         100 => "Continue",
         101 => "Switching Protocols",
