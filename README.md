@@ -60,7 +60,7 @@ The architecture follows the ASGI specification, using Python integration to com
 
 ### **Estimated Speedup for FastAPI**
 
-For a basic FastAPI app (`/hello` returning JSON), here’s a rough comparison:
+For a basic FastAPI app (`/hello` returning JSON), here's a rough comparison:
 
 | **Server** | **Avg Latency (ms)** | **Requests/sec** |
 | --- | --- | --- |
@@ -72,3 +72,9 @@ For a basic FastAPI app (`/hello` returning JSON), here’s a rough comparison:
 - You could see a **20-50% increase** in requests per second.
 - Latency could **drop by 30-70%**, especially under high concurrency.
 - **CPU & memory usage** would likely be **lower** compared to Uvicorn.
+
+## License
+
+This project is licensed under the BSD 3-Clause License. See the [LICENSE](LICENSE) file for details.
+
+This project is inspired by and based on concepts from the [Uvicorn project](https://github.com/encode/uvicorn), which is also licensed under the BSD 3-Clause License.
