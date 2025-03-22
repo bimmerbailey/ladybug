@@ -2,6 +2,29 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const json = std.json;
 
+/// Helper function to clean up JSON values in Zig 0.14
+pub fn jsonValueDeinit(value: json.Value, allocator: Allocator) void {
+    switch (value) {
+        .string => |s| allocator.free(s),
+        .array => |*arr| {
+            for (arr.items) |*item| {
+                jsonValueDeinit(item.*, allocator);
+            }
+            arr.deinit();
+        },
+        .object => |obj| {
+            var mutable_obj = obj;
+            var it = mutable_obj.iterator();
+            while (it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                jsonValueDeinit(entry.value_ptr.*, allocator);
+            }
+            mutable_obj.deinit();
+        },
+        else => {}, // No cleanup needed for other types
+    }
+}
+
 /// ASGI specification version
 pub const AsgiVersion = struct {
     version: []const u8 = "3.0",

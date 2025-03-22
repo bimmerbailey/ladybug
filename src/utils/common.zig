@@ -181,58 +181,123 @@ pub const WorkerPool = struct {
 
         try argv.append(self.app);
 
-        // Fork a new process
-        const pid = try std.os.fork();
-        if (pid == 0) {
-            // Child process - exec ladybug
-            const environ = std.c.environ;
-            const result = std.os.execveZ("/usr/bin/env", argv.items, environ);
-            std.debug.print("Failed to start worker: {!}\n", .{result});
-            std.os.exit(1);
-        }
+        // Platform-specific process spawning
+        const builtin = @import("builtin");
+        if (builtin.os.tag == .linux or builtin.os.tag == .freebsd or
+            builtin.os.tag == .netbsd or builtin.os.tag == .openbsd)
+        {
+            // On Unix-like systems that support fork/exec
+            const pid = try std.os.fork();
+            if (pid == 0) {
+                // Child process - exec ladybug
+                const environ = std.c.environ;
+                const result = std.os.execveZ("/usr/bin/env", argv.items, environ);
+                std.debug.print("Failed to start worker: {!}\n", .{result});
+                std.os.exit(1);
+            }
 
-        // Parent process - track the worker
-        try self.workers.append(Worker{
-            .pid = pid,
-            .status = .starting,
-        });
+            // Parent process - track the worker
+            try self.workers.append(Worker{
+                .pid = pid,
+                .status = .starting,
+            });
+        } else if (builtin.os.tag == .macos or builtin.os.tag == .darwin) {
+            // On macOS, use child_process
+            const child_process = std.process;
+            var args = std.ArrayList([]const u8).init(self.allocator);
+            defer args.deinit();
+
+            try args.append("/usr/bin/env");
+            try args.append("ladybug");
+            try args.append("--worker");
+            try args.append("--host");
+            try args.append(self.host);
+            try args.append("--port");
+            try args.append(port_str);
+            try args.append(self.app);
+
+            _ = try child_process.Child.run(.{
+                .allocator = self.allocator,
+                .argv = args.items,
+            });
+
+            // Child process ID will be invalid on macOS, but we still need a placeholder
+            const mock_pid: std.c.pid_t = 0;
+            try self.workers.append(Worker{
+                .pid = mock_pid,
+                .status = .starting,
+            });
+        } else {
+            // Unsupported platform
+            return error.UnsupportedPlatform;
+        }
     }
 
-    /// Stop all workers
+    /// Stop all worker processes gracefully
     pub fn stop(self: *Self) void {
+        const builtin = @import("builtin");
+        // First send TERM signal to all workers
         for (self.workers.items) |worker| {
-            _ = std.os.kill(worker.pid, std.os.SIG.TERM) catch continue;
+            if (builtin.os.tag != .macos and builtin.os.tag != .darwin) {
+                _ = std.os.kill(worker.pid, std.os.SIG.TERM) catch continue;
+            } else {
+                // On macOS, use SIGTERM (15)
+                _ = std.c.kill(worker.pid, 15);
+            }
         }
 
         // Wait for all workers to exit
         while (self.workers.items.len > 0) {
-            const pid = std.os.waitpid(-1, 0);
-            if (pid.pid <= 0) break;
+            if (builtin.os.tag != .macos and builtin.os.tag != .darwin) {
+                const pid = std.os.waitpid(-1, 0);
+                if (pid.pid <= 0) break;
 
-            // Remove the worker from the list
-            for (self.workers.items, 0..) |worker, i| {
-                if (worker.pid == pid.pid) {
-                    _ = self.workers.swapRemove(i);
-                    break;
+                // Remove the worker from the list
+                for (self.workers.items, 0..) |worker, i| {
+                    if (worker.pid == pid.pid) {
+                        _ = self.workers.swapRemove(i);
+                        break;
+                    }
                 }
+            } else {
+                // On macOS, just remove one worker from the list
+                // since we don't have proper worker tracking
+                if (self.workers.items.len > 0) {
+                    _ = self.workers.swapRemove(0);
+                }
+                std.time.sleep(100 * std.time.ns_per_ms); // Wait a bit
             }
         }
     }
 
     /// Check if any workers need to be restarted
     pub fn check(self: *Self) !void {
-        var status: std.os.WaitPidResult = undefined;
-        while (true) {
-            status = std.os.waitpid(-1, std.os.W.NOHANG);
-            if (status.pid <= 0) break;
+        const builtin = @import("builtin");
 
-            // Remove the worker from the list
-            for (self.workers.items, 0..) |worker, i| {
-                if (worker.pid == status.pid) {
-                    _ = self.workers.swapRemove(i);
-                    break;
+        if (builtin.os.tag != .macos and builtin.os.tag != .darwin) {
+            // On Linux and other Unix-like systems, use waitpid
+            var status: struct {
+                pid: std.c.pid_t,
+                status: u32,
+            } = undefined;
+
+            while (true) {
+                const rc = std.c.waitpid(-1, &status.status, std.c.WNOHANG);
+                status.pid = rc;
+
+                if (status.pid <= 0) break;
+
+                // Remove the worker from the list
+                for (self.workers.items, 0..) |worker, i| {
+                    if (worker.pid == status.pid) {
+                        _ = self.workers.swapRemove(i);
+                        break;
+                    }
                 }
             }
+        } else {
+            // On macOS, we'll use a simpler approach since we don't have proper worker tracking
+            // Just maintain the worker count
         }
 
         // Start new workers if needed

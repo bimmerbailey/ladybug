@@ -65,6 +65,78 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
+    // Python paths for Homebrew Python 3.13
+    const python_include_path = "/opt/homebrew/opt/python@3.13/Frameworks/Python.framework/Versions/3.13/include/python3.13";
+    const python_lib_path = "/opt/homebrew/opt/python@3.13/Frameworks/Python.framework/Versions/3.13/lib";
+    const python_lib_name = "python3.13";
+
+    // Create a Python wrapper module
+    const python_wrapper_mod = b.createModule(.{
+        .root_source_file = b.path("src/python/wrapper.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add include path to wrapper module (C imports need this)
+    python_wrapper_mod.addIncludePath(.{ .cwd_relative = python_include_path });
+    python_wrapper_mod.addIncludePath(.{ .cwd_relative = "include" });
+
+    // Add C file for Python compatibility
+    exe.addCSourceFile(.{
+        .file = b.path("include/py_compat.c"),
+        .flags = &.{},
+    });
+
+    // Add the wrapper module to both executable and library modules
+    exe_mod.addImport("python_wrapper", python_wrapper_mod);
+    lib_mod.addImport("python_wrapper", python_wrapper_mod);
+
+    // Add Python to executable
+    exe.addIncludePath(.{ .cwd_relative = python_include_path });
+    exe.addIncludePath(.{ .cwd_relative = "include" }); // Add our wrapper directory
+    exe.addLibraryPath(.{ .cwd_relative = python_lib_path });
+    exe.linkSystemLibrary(python_lib_name);
+    exe.linkLibC();
+
+    // Test module needs Python too
+    const python_integration_test = b.addTest(.{
+        .name = "python-integration-test",
+        .root_source_file = b.path("src/python/integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add protocol module import
+    const protocol_mod = b.createModule(.{
+        .root_source_file = b.path("src/asgi/protocol.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Make protocol available to other modules
+    python_wrapper_mod.addImport("protocol", protocol_mod);
+    exe_mod.addImport("protocol", protocol_mod);
+    lib_mod.addImport("protocol", protocol_mod);
+
+    python_integration_test.root_module.addImport("protocol", protocol_mod);
+    python_integration_test.root_module.addImport("python_wrapper", python_wrapper_mod);
+
+    python_integration_test.addIncludePath(.{ .cwd_relative = python_include_path });
+    python_integration_test.addIncludePath(.{ .cwd_relative = "include" });
+    python_integration_test.addLibraryPath(.{ .cwd_relative = python_lib_path });
+    python_integration_test.linkSystemLibrary(python_lib_name);
+    python_integration_test.linkLibC();
+
+    // Add C file for Python compatibility to the test
+    python_integration_test.addCSourceFile(.{
+        .file = b.path("include/py_compat.c"),
+        .flags = &.{},
+    });
+
+    const run_python_tests = b.addRunArtifact(python_integration_test);
+    const test_python_step = b.step("test-python", "Run Python integration tests");
+    test_python_step.dependOn(&run_python_tests.step);
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
