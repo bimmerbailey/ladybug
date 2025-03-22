@@ -4,7 +4,29 @@
 const std = @import("std");
 const testing = std.testing;
 
-pub export fn add(a: i32, b: i32) i32 {
+// Root file for the ladybug library
+// This exports the library components that can be used by other applications
+
+// HTTP Server
+pub const http = @import("http/server.zig");
+
+// ASGI protocol implementation
+pub const asgi = @import("asgi/protocol.zig");
+
+// WebSocket support
+pub const websocket = @import("websocket/server.zig");
+
+// Python integration
+pub const python = @import("python/integration.zig");
+
+// CLI utilities
+pub const cli = @import("cli/options.zig");
+
+// Utility functions
+pub const utils = @import("utils/common.zig");
+
+// Functions for the library
+pub fn add(a: i32, b: i32) i32 {
     return a + b;
 }
 

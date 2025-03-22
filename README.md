@@ -19,3 +19,41 @@ This is a work in progress. The project is being developed through "vibe coding"
 
 - Basic HTTP server implementation
 - More features coming soon!
+
+## Component Overview
+
+### Main Server Flow
+
+- `main()`: Entry point that sets up the server based on CLI arguments
+- `runMaster()`: Manages worker processes when running in multi-worker mode
+- `runWorker()`: Handles the actual server work in a single process
+- `handleConnection()`: Processes incoming HTTP requests
+
+### ASGI Communication
+
+- `handleLifespan()`: Manages application startup/shutdown events
+- `callAsgiApplication()`: Calls the Python ASGI application with required parameters
+- `createHttpScope()`: Creates the HTTP scope dictionary for ASGI
+- `createWebSocketScope()`: Creates WebSocket scope for ASGI
+- `MessageQueue`: Handles message passing between server and application
+
+### Python Integration
+
+- `loadApplication()`: Loads the Python ASGI application from a module
+- `toPyString()/fromPyString()`: Convert between Zig and Python strings
+- `jsonToPyObject()/pyObjectToJson()`: Convert between JSON and Python objects
+- `createReceiveCallable()/createSendCallable()`: Create Python functions for ASGI interface
+
+### WebSocket Support
+
+- `handleWebSocketConnection()`: Manages WebSocket connections
+- `handshake()`: Performs the WebSocket protocol handshake
+- `Connection.send()/Connection.receive()`: Send/receive WebSocket messages
+
+### Utilities
+
+- `Logger`: Provides logging functionality with different severity levels
+- `WorkerPool`: Manages worker processes for multi-process mode
+- `Options`: Handles command-line arguments and configuration
+
+The architecture follows the ASGI specification, using Python integration to communicate with Python web frameworks while providing HTTP and WebSocket handling in Zig.

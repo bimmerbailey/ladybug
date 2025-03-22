@@ -1,0 +1,209 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+/// CLI options for the server
+pub const Options = struct {
+    // Server options
+    host: []const u8 = "127.0.0.1",
+    port: u16 = 8000,
+    uds: ?[]const u8 = null,
+    fd: ?u32 = null,
+
+    // Application loading
+    app: []const u8 = "", // In format "module:attr"
+    factory: bool = false,
+
+    // Process options
+    workers: u16 = 1,
+    loop: []const u8 = "auto", // auto, asyncio, uvloop
+    http: []const u8 = "auto", // auto, h11, httptools
+    ws: []const u8 = "auto", // auto, websockets, wsproto
+    lifespan: []const u8 = "auto", // auto, on, off
+    interface: []const u8 = "asgi3", // asgi3, asgi2, wsgi
+
+    // Development options
+    reload: bool = false,
+    reload_dirs: ?[]const []const u8 = null,
+    reload_includes: ?[]const []const u8 = null,
+    reload_excludes: ?[]const []const u8 = null,
+
+    // Server resource options
+    limit_concurrency: ?u32 = null,
+    limit_max_requests: ?u32 = null,
+    backlog: u32 = 2048,
+    timeout_keep_alive: u32 = 5,
+
+    // SSL options
+    ssl_keyfile: ?[]const u8 = null,
+    ssl_certfile: ?[]const u8 = null,
+    ssl_version: ?u32 = null,
+    ssl_cert_reqs: u32 = 1, // ssl.CERT_OPTIONAL
+    ssl_ca_certs: ?[]const u8 = null,
+    ssl_ciphers: ?[]const u8 = null,
+
+    // HTTP options
+    root_path: ?[]const u8 = null,
+    proxy_headers: bool = true,
+    forwarded_allow_ips: ?[]const u8 = null,
+
+    // Logging options
+    log_level: []const u8 = "info",
+    access_log: bool = true,
+    use_colors: bool = true,
+
+    /// Initialize options with default values
+    pub fn init() Options {
+        return Options{};
+    }
+
+    /// Parse command line arguments
+    pub fn parseArgs(self: *Options, allocator: Allocator, args: []const []const u8) !void {
+        var i: usize = 1; // Skip the program name
+        while (i < args.len) : (i += 1) {
+            const arg = args[i];
+
+            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+                try self.printUsage(allocator);
+                std.process.exit(0);
+            } else if (std.mem.startsWith(u8, arg, "--host=")) {
+                self.host = try allocator.dupe(u8, arg[7..]);
+            } else if (std.mem.eql(u8, arg, "--host") and i + 1 < args.len) {
+                i += 1;
+                self.host = try allocator.dupe(u8, args[i]);
+            } else if (std.mem.startsWith(u8, arg, "--port=")) {
+                self.port = try std.fmt.parseInt(u16, arg[7..], 10);
+            } else if (std.mem.eql(u8, arg, "--port") and i + 1 < args.len) {
+                i += 1;
+                self.port = try std.fmt.parseInt(u16, args[i], 10);
+            } else if (std.mem.startsWith(u8, arg, "--workers=")) {
+                self.workers = try std.fmt.parseInt(u16, arg[10..], 10);
+            } else if (std.mem.eql(u8, arg, "--workers") and i + 1 < args.len) {
+                i += 1;
+                self.workers = try std.fmt.parseInt(u16, args[i], 10);
+            } else if (std.mem.eql(u8, arg, "--reload")) {
+                self.reload = true;
+            } else if (std.mem.startsWith(u8, arg, "--reload-dir=")) {
+                if (self.reload_dirs == null) {
+                    self.reload_dirs = try allocator.alloc([]const u8, 1);
+                    self.reload_dirs.?[0] = try allocator.dupe(u8, arg[13..]);
+                } else {
+                    const old_dirs = self.reload_dirs.?;
+                    self.reload_dirs = try allocator.alloc([]const u8, old_dirs.len + 1);
+                    std.mem.copy([]const u8, self.reload_dirs.?[0..old_dirs.len], old_dirs);
+                    self.reload_dirs.?[old_dirs.len] = try allocator.dupe(u8, arg[13..]);
+                    allocator.free(old_dirs);
+                }
+            } else if (std.mem.eql(u8, arg, "--reload-dir") and i + 1 < args.len) {
+                i += 1;
+                if (self.reload_dirs == null) {
+                    self.reload_dirs = try allocator.alloc([]const u8, 1);
+                    self.reload_dirs.?[0] = try allocator.dupe(u8, args[i]);
+                } else {
+                    const old_dirs = self.reload_dirs.?;
+                    self.reload_dirs = try allocator.alloc([]const u8, old_dirs.len + 1);
+                    std.mem.copy([]const u8, self.reload_dirs.?[0..old_dirs.len], old_dirs);
+                    self.reload_dirs.?[old_dirs.len] = try allocator.dupe(u8, args[i]);
+                    allocator.free(old_dirs);
+                }
+            } else if (std.mem.startsWith(u8, arg, "--log-level=")) {
+                self.log_level = try allocator.dupe(u8, arg[12..]);
+            } else if (std.mem.eql(u8, arg, "--log-level") and i + 1 < args.len) {
+                i += 1;
+                self.log_level = try allocator.dupe(u8, args[i]);
+            } else if (std.mem.eql(u8, arg, "--no-access-log")) {
+                self.access_log = false;
+            } else if (std.mem.eql(u8, arg, "--no-use-colors")) {
+                self.use_colors = false;
+            } else if (std.mem.startsWith(u8, arg, "--lifespan=")) {
+                self.lifespan = try allocator.dupe(u8, arg[11..]);
+            } else if (std.mem.eql(u8, arg, "--lifespan") and i + 1 < args.len) {
+                i += 1;
+                self.lifespan = try allocator.dupe(u8, args[i]);
+            } else if (std.mem.startsWith(u8, arg, "--interface=")) {
+                self.interface = try allocator.dupe(u8, arg[12..]);
+            } else if (std.mem.eql(u8, arg, "--interface") and i + 1 < args.len) {
+                i += 1;
+                self.interface = try allocator.dupe(u8, args[i]);
+            } else if (!std.mem.startsWith(u8, arg, "-")) {
+                // Assume it's the application
+                self.app = try allocator.dupe(u8, arg);
+            }
+        }
+
+        // Validate options
+        if (self.app.len == 0) {
+            std.debug.print("Error: No application specified.\n", .{});
+            try self.printUsage(allocator);
+            std.process.exit(1);
+        }
+    }
+
+    /// Print usage information
+    pub fn printUsage(self: *Options, allocator: Allocator) !void {
+        const stdout = std.io.getStdOut().writer();
+
+        try stdout.writeAll(
+            \\Usage: ladybug [OPTIONS] APP
+            \\
+            \\Arguments:
+            \\  APP                         Application to run in format "module:attribute" (required)
+            \\
+            \\Options:
+            \\  --host TEXT                 Bind socket to this host. [default: 127.0.0.1]
+            \\  --port INTEGER              Bind socket to this port. [default: 8000]
+            \\  --workers INTEGER           Number of worker processes. [default: 1]
+            \\  --reload                    Enable auto-reload.
+            \\  --reload-dir PATH           Specify directories to watch for file changes.
+            \\  --log-level TEXT            Set log level. [default: info]
+            \\  --no-access-log             Disable access log.
+            \\  --no-use-colors             Don't use colors in logs.
+            \\  --lifespan TEXT             Lifespan implementation. [default: auto]
+            \\  --interface TEXT            Select ASGI3, ASGI2, or WSGI app. [default: asgi3]
+            \\  -h, --help                  Show this help message and exit.
+            \\
+        );
+    }
+
+    /// Parse the application string into module and attribute
+    pub fn parseApp(self: *const Options, allocator: Allocator) !struct { module: []const u8, attr: []const u8 } {
+        var parts = std.mem.split(u8, self.app, ":");
+        const module = parts.next() orelse {
+            std.debug.print("Error: Invalid application format. Expected 'module:attribute'.\n", .{});
+            std.process.exit(1);
+        };
+
+        const attr = parts.next() orelse {
+            std.debug.print("Error: Invalid application format. Expected 'module:attribute'.\n", .{});
+            std.process.exit(1);
+        };
+
+        return .{
+            .module = try allocator.dupe(u8, module),
+            .attr = try allocator.dupe(u8, attr),
+        };
+    }
+
+    /// Clean up allocated resources
+    pub fn deinit(self: *Options, allocator: Allocator) void {
+        if (self.reload_dirs) |dirs| {
+            for (dirs) |dir| {
+                allocator.free(dir);
+            }
+            allocator.free(dirs);
+        }
+
+        if (self.reload_includes) |includes| {
+            for (includes) |include| {
+                allocator.free(include);
+            }
+            allocator.free(includes);
+        }
+
+        if (self.reload_excludes) |excludes| {
+            for (excludes) |exclude| {
+                allocator.free(exclude);
+            }
+            allocator.free(excludes);
+        }
+    }
+};
