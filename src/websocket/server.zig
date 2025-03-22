@@ -73,7 +73,8 @@ pub const Connection = struct {
     /// Send a WebSocket frame
     fn sendFrame(self: *Connection, fin: bool, opcode: Opcode, data: []const u8) !void {
         // First byte: FIN bit + opcode
-        const first_byte: u8 = @as(u8, @intFromEnum(opcode)) | (if (fin) 0x80 else 0);
+        const fin_bit: u8 = if (fin) 0x80 else 0;
+        const first_byte: u8 = @as(u8, @intFromEnum(opcode)) | fin_bit;
 
         // Prepare the buffer
         var buffer = std.ArrayList(u8).init(self.allocator);
@@ -105,14 +106,15 @@ pub const Connection = struct {
             // 8-byte extended payload length
             var i: usize = 8;
             while (i > 0) : (i -= 1) {
-                try buffer.append(@intCast((data.len >> ((i - 1) * 8)) & 0xFF));
+                const shift_amount: u6 = @intCast((i - 1) * 8);
+                try buffer.append(@intCast((data.len >> shift_amount) & 0xFF));
             }
         }
 
         // Add masking key if needed
         var mask_key: [4]u8 = undefined;
         if (self.mask_outgoing) {
-            try crypto.random.bytes(&mask_key);
+            crypto.random.bytes(&mask_key);
             try buffer.appendSlice(&mask_key);
         }
 
@@ -175,7 +177,8 @@ pub const Connection = struct {
 
             payload_len = 0;
             for (ext_len, 0..) |byte, i| {
-                payload_len |= @as(usize, byte) << ((7 - i) * 8);
+                const shift_amount: u6 = @intCast((7 - i) * 8);
+                payload_len |= @as(usize, byte) << shift_amount;
             }
         }
 
@@ -235,7 +238,7 @@ pub fn handshake(allocator: Allocator, stream: net.Stream, request_headers: std.
     const websocket_key = request_headers.get("Sec-WebSocket-Key") orelse return error.NotWebSocketRequest;
 
     if (!std.ascii.eqlIgnoreCase(upgrade, "websocket") or
-        !std.mem.indexOf(u8, connection, "upgrade"))
+        std.mem.indexOf(u8, connection, "upgrade") == null)
     {
         return error.NotWebSocketRequest;
     }

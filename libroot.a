@@ -1,0 +1,13 @@
+const lib_mod = b.createModule(.{
+    .root_source_file = b.path("src/root.zig"),
+    .target = target,
+    .optimize = optimize,
+});
+
+const lib = b.addLibrary(.{
+    .linkage = .static,
+    .name = "ladybug",
+    .root_module = lib_mod,
+});
+
+b.installArtifact(lib);
