@@ -23,9 +23,9 @@ pub const Options = struct {
 
     // Development options
     reload: bool = false,
-    reload_dirs: ?[]const []const u8 = null,
-    reload_includes: ?[]const []const u8 = null,
-    reload_excludes: ?[]const []const u8 = null,
+    reload_dirs: ?[][]const u8 = null,
+    reload_includes: ?[][]const u8 = null,
+    reload_excludes: ?[][]const u8 = null,
 
     // Server resource options
     limit_concurrency: ?u32 = null,
@@ -89,7 +89,9 @@ pub const Options = struct {
                 } else {
                     const old_dirs = self.reload_dirs.?;
                     self.reload_dirs = try allocator.alloc([]const u8, old_dirs.len + 1);
-                    std.mem.copy([]const u8, self.reload_dirs.?[0..old_dirs.len], old_dirs);
+                    for (old_dirs, 0..) |dir, index| {
+                        self.reload_dirs.?[index] = dir;
+                    }
                     self.reload_dirs.?[old_dirs.len] = try allocator.dupe(u8, arg[13..]);
                     allocator.free(old_dirs);
                 }
@@ -101,7 +103,9 @@ pub const Options = struct {
                 } else {
                     const old_dirs = self.reload_dirs.?;
                     self.reload_dirs = try allocator.alloc([]const u8, old_dirs.len + 1);
-                    std.mem.copy([]const u8, self.reload_dirs.?[0..old_dirs.len], old_dirs);
+                    for (old_dirs, 0..) |dir, index| {
+                        self.reload_dirs.?[index] = dir;
+                    }
                     self.reload_dirs.?[old_dirs.len] = try allocator.dupe(u8, args[i]);
                     allocator.free(old_dirs);
                 }
@@ -140,6 +144,8 @@ pub const Options = struct {
 
     /// Print usage information
     pub fn printUsage(self: *Options, allocator: Allocator) !void {
+        _ = self; // Mark as used (removing parameter would break existing call sites)
+        _ = allocator; // Mark as used
         const stdout = std.io.getStdOut().writer();
 
         try stdout.writeAll(
@@ -166,7 +172,7 @@ pub const Options = struct {
 
     /// Parse the application string into module and attribute
     pub fn parseApp(self: *const Options, allocator: Allocator) !struct { module: []const u8, attr: []const u8 } {
-        var parts = std.mem.split(u8, self.app, ":");
+        var parts = std.mem.splitScalar(u8, self.app, ':');
         const module = parts.next() orelse {
             std.debug.print("Error: Invalid application format. Expected 'module:attribute'.\n", .{});
             std.process.exit(1);
@@ -207,3 +213,79 @@ pub const Options = struct {
         }
     }
 };
+
+// Tests for the Options module
+test "Options initialization" {
+    const options = Options.init();
+    try std.testing.expectEqualStrings("127.0.0.1", options.host);
+    try std.testing.expectEqual(@as(u16, 8000), options.port);
+    try std.testing.expectEqual(@as(u16, 1), options.workers);
+    try std.testing.expectEqualStrings("info", options.log_level);
+    try std.testing.expect(options.access_log);
+    try std.testing.expect(options.use_colors);
+    try std.testing.expectEqualStrings("auto", options.lifespan);
+    try std.testing.expectEqualStrings("asgi3", options.interface);
+    try std.testing.expect(!options.reload);
+}
+
+test "Options.parseArgs basic functionality" {
+    var options = Options.init();
+    const allocator = std.testing.allocator;
+
+    // Test arguments array
+    const args = [_][]const u8{ "program_name", "--host=example.com", "--port=9000", "--workers=4", "--reload", "--log-level=debug", "module:app" };
+
+    try options.parseArgs(allocator, &args);
+
+    try std.testing.expectEqualStrings("example.com", options.host);
+    try std.testing.expectEqual(@as(u16, 9000), options.port);
+    try std.testing.expectEqual(@as(u16, 4), options.workers);
+    try std.testing.expect(options.reload);
+    try std.testing.expectEqualStrings("debug", options.log_level);
+    try std.testing.expectEqualStrings("module:app", options.app);
+
+    // Clean up
+    options.deinit(allocator);
+    allocator.free(options.host);
+    allocator.free(options.log_level);
+    allocator.free(options.app);
+}
+
+test "Options.parseApp functionality" {
+    var options = Options.init();
+    const allocator = std.testing.allocator;
+
+    // Set app value directly for testing
+    options.app = "module:attribute";
+
+    const result = try options.parseApp(allocator);
+    defer {
+        allocator.free(result.module);
+        allocator.free(result.attr);
+    }
+
+    try std.testing.expectEqualStrings("module", result.module);
+    try std.testing.expectEqualStrings("attribute", result.attr);
+}
+
+test "Options with reload directories" {
+    var options = Options.init();
+    const allocator = std.testing.allocator;
+
+    // Test arguments with reload directories
+    const args = [_][]const u8{ "program_name", "--reload", "--reload-dir=src", "--reload-dir=tests", "module:app" };
+
+    try options.parseArgs(allocator, &args);
+
+    try std.testing.expect(options.reload);
+    try std.testing.expect(options.reload_dirs != null);
+    if (options.reload_dirs) |dirs| {
+        try std.testing.expectEqual(@as(usize, 2), dirs.len);
+        try std.testing.expectEqualStrings("src", dirs[0]);
+        try std.testing.expectEqualStrings("tests", dirs[1]);
+    }
+
+    // Clean up
+    options.deinit(allocator);
+    allocator.free(options.app);
+}
