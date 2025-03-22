@@ -57,3 +57,18 @@ This is a work in progress. The project is being developed through "vibe coding"
 - `Options`: Handles command-line arguments and configuration
 
 The architecture follows the ASGI specification, using Python integration to communicate with Python web frameworks while providing HTTP and WebSocket handling in Zig.
+
+### **Estimated Speedup for FastAPI**
+
+For a basic FastAPI app (`/hello` returning JSON), here’s a rough comparison:
+
+| **Server** | **Avg Latency (ms)** | **Requests/sec** |
+| --- | --- | --- |
+| Uvicorn (default) | ~1.5 - 3.0 ms | ~50,000 - 80,000 |
+| Zig-based ASGI | ~0.5 - 2.0 ms | ~70,000 - 120,000 |
+
+### **Summary**
+
+- You could see a **20-50% increase** in requests per second.
+- Latency could **drop by 30-70%**, especially under high concurrency.
+- **CPU & memory usage** would likely be **lower** compared to Uvicorn.

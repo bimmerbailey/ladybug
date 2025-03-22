@@ -38,25 +38,19 @@ expected 1 argument, found 2
 
 This often occurs in the Python integration module with functions like `@ptrCast()` or `PyBytes_AsStringAndSize()`.
 
-**Fix**:
-Modify `src/python/integration.zig` to ensure:
+**Fix**: ✅ FIXED
 
-1. Pointers are cast with the correct number of arguments:
+The Python integration module has been updated to use the correct function signatures. The current version correctly uses:
 
-   ```zig
-   // Change:
-   @ptrCast(*TypeName, @alignCast(@alignOf(*TypeName), ptr));
-   // To:
-   @as(*TypeName, @ptrCast(ptr));
-   ```
+```zig
+const self = @as(*@This(), @ptrCast(ptr));
+```
 
-2. Correct signatures for C API functions:
+instead of the deprecated:
 
-   ```zig
-   // Make sure PyBytes_AsStringAndSize has correct parameters:
-   var bytes_ptr: [*c]u8 = undefined;
-   const result = c.PyBytes_AsStringAndSize(py_obj, &bytes_ptr, &size);
-   ```
+```zig
+@ptrCast(*TypeName, @alignCast(@alignOf(*TypeName), ptr));
+```
 
 ### Missing Libraries
 
@@ -80,8 +74,9 @@ error: library not found for -lpython3.x
 **Error**:
 Signal handlers not working correctly or compiler warnings.
 
-**Fix**:
-The signal handler struct in `src/main.zig` should be modified to match the expected signature:
+**Fix**: ✅ FIXED
+
+The signal handler struct in `src/main.zig` has been corrected to match the expected signature:
 
 ```zig
 fn handle(sig: c_int, handler_ptr: ?*anyopaque) callconv(.C) void {
@@ -153,11 +148,9 @@ Error in WebSocket handshake
 
 **Issue**: Build errors related to Zig version.
 
-**Fix**:
-Ladybug is developed with Zig 0.11.x. If you're using a different version:
+**Fix**: ✅ FIXED
 
-1. Update to compatible Zig version
-2. Check for API changes in the Zig standard library that may affect the code
+Ladybug now works with Zig 0.11.x and later. The build.zig file has been updated to use the new module system introduced in Zig 0.11. If you're using an older version, please update to a compatible Zig version.
 
 ## Contributing Fixes
 
