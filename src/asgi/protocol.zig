@@ -51,10 +51,8 @@ pub const MessageQueue = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        for (self.messages.items) |*message| {
-            message.deinit(self.allocator);
-        }
-
+        // In Zig 0.14.0, json.Value doesn't have a deinit method
+        // We can just deallocate the ArrayList itself
         self.messages.deinit();
     }
 };
