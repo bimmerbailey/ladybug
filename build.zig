@@ -67,8 +67,8 @@ pub fn build(b: *std.Build) void {
 
     // Python paths for Homebrew Python 3.13
     const python_include_path = "/opt/homebrew/opt/python@3.13/Frameworks/Python.framework/Versions/3.13/include/python3.13";
-    const python_lib_path = "/opt/homebrew/opt/python@3.13/Frameworks/Python.framework/Versions/3.13/lib";
-    const python_lib_name = "python3.13";
+    const python_lib_path = "/opt/homebrew/opt/python@3.13/Frameworks";
+    const python_lib_name = "python";
 
     // Create a Python wrapper module
     const python_wrapper_mod = b.createModule(.{
@@ -92,10 +92,10 @@ pub fn build(b: *std.Build) void {
     lib_mod.addImport("python_wrapper", python_wrapper_mod);
 
     // Add Python to executable
-    exe.addIncludePath(.{ .cwd_relative = python_include_path });
+    exe.addSystemIncludePath(.{ .cwd_relative = python_include_path });
     exe.addIncludePath(.{ .cwd_relative = "include" }); // Add our wrapper directory
-    exe.addLibraryPath(.{ .cwd_relative = python_lib_path });
-    exe.linkSystemLibrary(python_lib_name);
+    exe.addFrameworkPath(.{ .cwd_relative = python_lib_path });
+    exe.linkFramework(python_lib_name);
     exe.linkLibC();
 
     // Test module needs Python too

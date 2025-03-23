@@ -143,9 +143,12 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
 
     // Run the lifespan protocol if enabled
     if (!std.mem.eql(u8, options.lifespan, "off")) {
+        std.debug.print("\nDEBUG: Running lifespan protocol\n", .{});
         try handleLifespan(allocator, app, logger);
+        std.debug.print("\nDEBUG: Lifespan protocol complete\n", .{});
     }
 
+    std.debug.print("\nDEBUG: Starting connection loop\n", .{});
     // Handle connections
     while (true) {
         // Accept a new connection
@@ -170,47 +173,60 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
 fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *const utils.Logger) !void {
     logger.debug("Running lifespan protocol", .{});
 
+    std.debug.print("DEBUG: Creating message queues\n", .{});
     // Create message queues
     var to_app = asgi.MessageQueue.init(allocator);
     defer to_app.deinit();
 
+    std.debug.print("DEBUG: Creating from_app message queue\n", .{});
     var from_app = asgi.MessageQueue.init(allocator);
     defer from_app.deinit();
 
+    std.debug.print("DEBUG: Creating scope\n", .{});
     // Create scope
     const scope = try asgi.createLifespanScope(allocator);
     defer asgi.jsonValueDeinit(scope, allocator);
 
+    std.debug.print("DEBUG: Creating Python scope dict\n", .{});
     // Create Python scope dict
     const py_scope = try python.createPyDict(allocator, scope);
     defer PyDecref(py_scope);
 
+    std.debug.print("DEBUG: Creating receive callable\n", .{});
     // Create callables
     const receive = try python.createReceiveCallable(&to_app);
     defer PyDecref(receive);
 
+    std.debug.print("DEBUG: Creating send callable\n", .{});
     const send = try python.createSendCallable(&from_app);
     defer PyDecref(send);
 
+    std.debug.print("DEBUG: Creating startup message\n", .{});
     // Send startup message
     const startup_msg = try asgi.createLifespanStartupMessage(allocator);
     defer asgi.jsonValueDeinit(startup_msg, allocator);
     try to_app.push(startup_msg);
 
+    std.debug.print("DEBUG: Creating app thread\n", .{});
     // Call the application (don't wait for it to complete)
     const app_thread = try std.Thread.spawn(.{}, callAppLifespan, .{
         app, py_scope, receive, send, logger,
     });
 
+    std.debug.print("DEBUG: Waiting for startup event\n", .{});
     // Wait for startup.complete or startup.failed
     while (true) {
+        std.debug.print("DEBUG: Waiting for event in loop\n", .{});
         var event = try from_app.receive();
+        std.debug.print("DEBUG: Received event\n", .{});
         defer asgi.jsonValueDeinit(event, allocator);
 
         // Check event type
+        std.debug.print("DEBUG: Checking event type\n", .{});
         const type_value = event.object.get("type") orelse continue;
         if (type_value != .string) continue;
 
+        std.debug.print("DEBUG: Event type: {s}\n", .{type_value.string});
         if (std.mem.eql(u8, type_value.string, "lifespan.startup.complete")) {
             logger.info("Lifespan startup complete", .{});
             break;
@@ -224,15 +240,20 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
         }
     }
 
+    std.debug.print("\nDEBUG: Lifespan protocol at end\n", .{});
     // Don't wait for the thread to complete - it will run for the lifetime of the application
     app_thread.detach();
 }
 
 /// Call the ASGI application for lifespan protocol
 fn callAppLifespan(app: *python.PyObject, scope: *python.PyObject, receive: *python.PyObject, send: *python.PyObject, logger: *const utils.Logger) void {
-    logger.debug("Calling ASGI application for lifespan", .{});
-
+    std.debug.print("\nDEBUG: Calling ASGI application from callAppLifespan app", .{});
+    // if (scope == null or receive == null or send == null) {
+    //     std.debug.print("DEBUG: Something is null in callAppLifespan\n", .{});
+    //     std.debug.print("DEBUG: App is null\n", .{});
+    // }
     python.callAsgiApplication(app, scope, receive, send) catch |err| {
+        std.debug.print("DEBUG: Error calling ASGI application for lifespan: {!}\n", .{err});
         logger.err("Error calling ASGI application for lifespan: {!}", .{err});
     };
 }
@@ -247,12 +268,12 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
 
     // Parse the HTTP request
     var request = http.parseRequest(allocator, &connection.stream) catch |err| {
-        logger.err("Error parsing HTTP request: {!}", .{err});
+        std.debug.print("Error parsing HTTP request: {!}", .{err});
         return;
     };
     defer request.deinit();
 
-    logger.debug("Received request: {s} {s}", .{ request.method, request.path });
+    std.debug.print("Received request: {s} {s}", .{ request.method, request.path });
 
     // Check if it's a WebSocket upgrade request
     if (isWebSocketUpgrade(&request)) {
@@ -315,6 +336,7 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     defer asgi.jsonValueDeinit(request_msg, allocator);
     try to_app.push(request_msg);
 
+    std.debug.print("\nDEBUG: Calling ASGI application from handleConnection\n", .{});
     // Call ASGI application
     try python.callAsgiApplication(app, py_scope, receive, send);
 
@@ -562,6 +584,7 @@ fn handleWebSocketConnection(allocator: std.mem.Allocator, connection: *std.net.
 fn callAppWebSocket(app: *python.PyObject, scope: *python.PyObject, receive: *python.PyObject, send: *python.PyObject, logger: *const utils.Logger) void {
     logger.debug("Calling ASGI application for WebSocket", .{});
 
+    std.debug.print("\nDEBUG: Calling ASGI application from callAppWebSocket\n", .{});
     python.callAsgiApplication(app, scope, receive, send) catch |err| {
         logger.err("Error calling ASGI application for WebSocket: {!}", .{err});
     };
@@ -580,6 +603,7 @@ fn isWebSocketUpgrade(request: *const http.Request) bool {
 
 /// Decrease the reference count of a Python object
 fn PyDecref(obj: *python.PyObject) void {
+    std.debug.print("DEBUG: Decrefing object: {*}\n", .{obj});
     python.decref(obj);
 }
 

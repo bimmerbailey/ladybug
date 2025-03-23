@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ladybug WebSocket Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+        }
+        #messages {
+            height: 300px;
+            border: 1px solid #ccc;
+            margin-bottom: 10px;
+            padding: 10px;
+            overflow-y: scroll;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+        input, button {
+            padding: 8px;
+            margin-right: 5px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .status {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .connected {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .disconnected {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        .connecting {
+            background-color: #fcf8e3;
+            color: #8a6d3b;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .sent {
+            background-color: #e8f4f8;
+            text-align: right;
+        }
+        .received {
+            background-color: #f0f0f0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Ladybug WebSocket Test</h1>
+    
+    <div id="status" class="status disconnected">Disconnected</div>
+    
+    <button id="connect">Connect</button>
+    <button id="disconnect" disabled>Disconnect</button>
+    
+    <h2>Messages</h2>
+    <div id="messages"></div>
+    
+    <div>
+        <input type="text" id="message" placeholder="Type a message..." disabled>
+        <button id="send" disabled>Send</button>
+    </div>
+    
+    <script>
+        let socket = null;
+        
+        // DOM elements
+        const statusEl = document.getElementById('status');
+        const messagesEl = document.getElementById('messages');
+        const messageInput = document.getElementById('message');
+        const sendButton = document.getElementById('send');
+        const connectButton = document.getElementById('connect');
+        const disconnectButton = document.getElementById('disconnect');
+        
+        // Connect to WebSocket
+        connectButton.addEventListener('click', () => {
+            // Get the current host and port
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host || 'localhost:8000';
+            const wsUrl = `${protocol}//${host}/ws`;
+            
+            try {
+                statusEl.textContent = 'Connecting...';
+                statusEl.className = 'status connecting';
+                
+                socket = new WebSocket(wsUrl);
+                
+                socket.onopen = () => {
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'status connected';
+                    messageInput.disabled = false;
+                    sendButton.disabled = false;
+                    connectButton.disabled = true;
+                    disconnectButton.disabled = false;
+                    addMessage('System', 'Connected to WebSocket server', 'received');
+                };
+                
+                socket.onmessage = (event) => {
+                    addMessage('Server', event.data, 'received');
+                };
+                
+                socket.onclose = (event) => {
+                    statusEl.textContent = `Disconnected (Code: ${event.code})`;
+                    statusEl.className = 'status disconnected';
+                    messageInput.disabled = true;
+                    sendButton.disabled = true;
+                    connectButton.disabled = false;
+                    disconnectButton.disabled = true;
+                    addMessage('System', `Connection closed (Code: ${event.code})`, 'received');
+                    socket = null;
+                };
+                
+                socket.onerror = (error) => {
+                    statusEl.textContent = 'Error connecting';
+                    statusEl.className = 'status disconnected';
+                    addMessage('System', 'WebSocket error', 'received');
+                    console.error('WebSocket error:', error);
+                };
+            } catch (error) {
+                console.error('Failed to create WebSocket:', error);
+                statusEl.textContent = 'Failed to connect';
+                statusEl.className = 'status disconnected';
+            }
+        });
+        
+        // Send message
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        
+        function sendMessage() {
+            if (!socket || socket.readyState !== WebSocket.OPEN) {
+                addMessage('System', 'Not connected to server', 'received');
+                return;
+            }
+            
+            const message = messageInput.value.trim();
+            if (!message) return;
+            
+            socket.send(message);
+            addMessage('You', message, 'sent');
+            messageInput.value = '';
+        }
+        
+        // Disconnect
+        disconnectButton.addEventListener('click', () => {
+            if (socket) {
+                socket.close(1000, 'User disconnected');
+            }
+        });
+        
+        // Add message to display
+        function addMessage(sender, text, type) {
+            const msgEl = document.createElement('div');
+            msgEl.className = `message ${type}`;
+            msgEl.textContent = `${sender}: ${text}`;
+            messagesEl.appendChild(msgEl);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+    </script>
+</body>
+</html> 
