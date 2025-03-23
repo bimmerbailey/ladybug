@@ -3,31 +3,31 @@ const Allocator = std.mem.Allocator;
 const python = @import("python_wrapper");
 
 // Re-export the python module as 'c' for compatibility with tests
-pub const c = python;
+// pub const c = python;
 
 // Import ASGI protocol module - use the module name defined in build.zig
 const protocol = @import("protocol");
 
 // Export the PyObject type for external use
-pub const PyObject = python.PyObject;
+pub const PyObject = python.og.PyObject;
 
 /// Workaround functions to access Python constants safely
-fn getPyNone() *python.PyObject {
+fn getPyNone() *PyObject {
     return python.getPyNone();
 }
 
 /// Get True from Python
-fn getPyTrue() *python.PyObject {
+fn getPyTrue() *PyObject {
     return python.getPyTrue();
 }
 
 /// Get False from Python
-fn getPyFalse() *python.PyObject {
+fn getPyFalse() *PyObject {
     return python.getPyFalse();
 }
 
 /// Workaround to make Python bool values in Zig
-fn getPyBool(value: bool) *python.PyObject {
+fn getPyBool(value: bool) *PyObject {
     return if (value) python.getPyTrue() else python.getPyFalse();
 }
 
@@ -203,7 +203,7 @@ pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*python
             return getPyBool(b);
         },
         .integer => |i| {
-            const py_int = python.PyLong_FromLongLong(i);
+            const py_int = python.og.PyLong_FromLongLong(i);
             if (py_int == null) {
                 handlePythonError();
                 return PythonError.ValueError;
@@ -211,7 +211,7 @@ pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*python
             return py_int.?;
         },
         .float => |f| {
-            const py_float = python.PyFloat_FromDouble(f);
+            const py_float = python.og.PyFloat_FromDouble(f);
             if (py_float == null) {
                 handlePythonError();
                 return PythonError.ValueError;
@@ -222,7 +222,7 @@ pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*python
             return try toPyString(s);
         },
         .array => |arr| {
-            const py_list = python.PyList_New(@intCast(arr.items.len));
+            const py_list = python.og.PyList_New(@intCast(arr.items.len));
             if (py_list == null) {
                 handlePythonError();
                 return PythonError.RuntimeError;
@@ -231,7 +231,7 @@ pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*python
             for (arr.items, 0..) |item, i| {
                 const py_item = try jsonToPyObject(allocator, item);
                 // PyList_SetItem steals a reference, so no DECREF
-                if (python.PyList_SetItem(py_list.?, @intCast(i), py_item) < 0) {
+                if (python.og.PyList_SetItem(py_list.?, @intCast(i), py_item) < 0) {
                     decref(py_list.?);
                     handlePythonError();
                     return PythonError.RuntimeError;
@@ -241,7 +241,7 @@ pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*python
             return py_list.?;
         },
         .object => |obj| {
-            const py_dict = python.PyDict_New();
+            const py_dict = python.og.PyDict_New();
             if (py_dict == null) {
                 handlePythonError();
                 return PythonError.RuntimeError;
@@ -397,21 +397,21 @@ pub fn pyObjectToJson(allocator: Allocator, py_obj: *python.PyObject) !std.json.
 }
 
 /// Function to get Python None for callback function
-fn getNoneForCallback() ?*python.PyObject {
+fn getNoneForCallback() ?*PyObject {
     const none = python.getPyNone();
     python.incref(none);
     return none;
 }
 
 /// Function to be called from Python's receive() callable
-fn pyReceiveCallback(self: *python.PyObject, _: *python.PyObject) callconv(.C) ?*python.PyObject {
+fn pyReceiveCallback(self: *PyObject, _: *PyObject) callconv(.C) ?*PyObject {
     // Expecting self to be a pointer to a Message Queue
     if (python.PyCapsule_CheckExact(self) == 0) {
         _ = python.PyErr_SetString(python.PyExc_TypeError, "Expected a capsule as self");
         return null;
     }
 
-    const queue_ptr = python.PyCapsule_GetPointer(self, "MessageQueue");
+    const queue_ptr = python.og.PyCapsule_GetPointer(self, "MessageQueue");
     if (queue_ptr == null) {
         return null;
     }
@@ -420,14 +420,14 @@ fn pyReceiveCallback(self: *python.PyObject, _: *python.PyObject) callconv(.C) ?
     const queue = @as(*protocol.MessageQueue, @alignCast(@ptrCast(queue_ptr)));
 
     // Create async task for awaiting
-    const asyncio = python.PyImport_ImportModule("asyncio");
+    const asyncio = python.og.PyImport_ImportModule("asyncio");
     if (asyncio == null) {
         _ = python.PyErr_SetString(python.PyExc_ImportError, "Failed to import asyncio");
         return null;
     }
     defer decref(asyncio.?);
 
-    const create_task = python.PyObject_GetAttrString(asyncio.?, "create_task");
+    const create_task = python.og.PyObject_GetAttrString(asyncio.?, "create_task");
     if (create_task == null) {
         _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get create_task");
         return null;
@@ -435,14 +435,14 @@ fn pyReceiveCallback(self: *python.PyObject, _: *python.PyObject) callconv(.C) ?
     defer decref(create_task.?);
 
     // Create a Future to handle asynchronous receive
-    const future_type = python.PyObject_GetAttrString(asyncio.?, "Future");
+    const future_type = python.og.PyObject_GetAttrString(asyncio.?, "Future");
     if (future_type == null) {
         _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get Future");
         return null;
     }
     defer decref(future_type.?);
 
-    const future = python.PyObject_CallObject(future_type.?, null);
+    const future = python.og.PyObject_CallObject(future_type.?, null);
     if (future == null) {
         return null;
     }
@@ -458,10 +458,11 @@ fn pyReceiveCallback(self: *python.PyObject, _: *python.PyObject) callconv(.C) ?
         return null;
     };
 
+    // Restore the thread state breaks when using python.og.PyEval_RestoreThread
     python.PyEval_RestoreThread(thread_state);
 
     // Set the result on the future
-    const set_result = python.PyObject_GetAttrString(future.?, "set_result");
+    const set_result = python.og.PyObject_GetAttrString(future.?, "set_result");
     if (set_result == null) {
         decref(future.?);
         return null;
@@ -471,7 +472,7 @@ fn pyReceiveCallback(self: *python.PyObject, _: *python.PyObject) callconv(.C) ?
     // Convert to Python dict
     const gpa = std.heap.c_allocator;
     const py_message = jsonToPyObject(gpa, message) catch {
-        _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to convert message to Python object");
+        _ = python.og.PyErr_SetString(python.PyExc_RuntimeError, "Failed to convert message to Python object");
         decref(future.?);
         return null;
     };
@@ -490,20 +491,20 @@ fn pyReceiveCallback(self: *python.PyObject, _: *python.PyObject) callconv(.C) ?
 }
 
 /// Function to be called from Python's send() callable
-fn pySendCallback(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?*python.PyObject {
+fn pySendCallback(self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject {
     // Ensure we have exactly one argument
     if (python.PyTuple_Size(args) != 1) {
-        _ = python.PyErr_SetString(python.PyExc_TypeError, "Expected exactly one argument");
+        _ = python.og.PyErr_SetString(python.PyExc_TypeError, "Expected exactly one argument");
         return null;
     }
 
     // Expecting self to be a pointer to a Message Queue
-    if (python.PyCapsule_CheckExact(self) == 0) {
+    if (python.og.PyCapsule_CheckExact(self) == 0) {
         _ = python.PyErr_SetString(python.PyExc_TypeError, "Expected a capsule as self");
         return null;
     }
 
-    const queue_ptr = python.PyCapsule_GetPointer(self, "MessageQueue");
+    const queue_ptr = python.og.PyCapsule_GetPointer(self, "MessageQueue");
     if (queue_ptr == null) {
         return null;
     }
@@ -512,7 +513,7 @@ fn pySendCallback(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?
     const queue = @as(*protocol.MessageQueue, @alignCast(@ptrCast(queue_ptr)));
 
     // Get the message argument
-    const message = python.PyTuple_GetItem(args, 0);
+    const message = python.og.PyTuple_GetItem(args, 0);
     if (message == null) {
         return null;
     }
@@ -525,7 +526,7 @@ fn pySendCallback(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?
     };
 
     // Create async task for awaiting
-    const asyncio = python.PyImport_ImportModule("asyncio");
+    const asyncio = python.og.PyImport_ImportModule("asyncio");
     if (asyncio == null) {
         _ = python.PyErr_SetString(python.PyExc_ImportError, "Failed to import asyncio");
         return null;
@@ -533,14 +534,14 @@ fn pySendCallback(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?
     defer decref(asyncio.?);
 
     // Create a Future to handle asynchronous send
-    const future_type = python.PyObject_GetAttrString(asyncio.?, "Future");
+    const future_type = python.og.PyObject_GetAttrString(asyncio.?, "Future");
     if (future_type == null) {
         _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get Future");
         return null;
     }
     defer decref(future_type.?);
 
-    const future = python.PyObject_CallObject(future_type.?, null);
+    const future = python.og.PyObject_CallObject(future_type.?, null);
     if (future == null) {
         return null;
     }
@@ -553,7 +554,7 @@ fn pySendCallback(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?
     };
 
     // Set the result on the future to None (indicating success)
-    const set_result = python.PyObject_GetAttrString(future.?, "set_result");
+    const set_result = python.og.PyObject_GetAttrString(future.?, "set_result");
     if (set_result == null) {
         decref(future.?);
         return null;
@@ -582,14 +583,14 @@ fn pySendCallback(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?
 /// Create a Python receive callable for ASGI
 pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     // Create capsule to hold the queue pointer
-    const capsule = python.PyCapsule_New(queue, "MessageQueue", null);
+    const capsule = python.og.PyCapsule_New(queue, "MessageQueue", null);
     if (capsule == null) {
         handlePythonError();
         return PythonError.RuntimeError;
     }
 
     // Create method definition
-    var method_def = python.PyMethodDef{
+    var method_def = python.og.PyMethodDef{
         .ml_name = "receive",
         .ml_meth = @ptrCast(&pyReceiveCallback),
         .ml_flags = python.METH_NOARGS,
@@ -597,7 +598,7 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     };
 
     // Create function object for receive
-    const py_func = python.PyCFunction_New(&method_def, capsule);
+    const py_func = python.og.PyCFunction_New(&method_def, capsule);
 
     if (py_func == null) {
         decref(capsule.?);
@@ -611,14 +612,14 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
 /// Create a Python send callable for ASGI
 pub fn createSendCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     // Create capsule to hold the queue pointer
-    const capsule = python.PyCapsule_New(queue, "MessageQueue", null);
+    const capsule = python.og.PyCapsule_New(queue, "MessageQueue", null);
     if (capsule == null) {
         handlePythonError();
         return PythonError.RuntimeError;
     }
 
     // Create method definition
-    var method_def = python.PyMethodDef{
+    var method_def = python.og.PyMethodDef{
         .ml_name = "send",
         .ml_meth = @ptrCast(&pySendCallback),
         .ml_flags = python.METH_VARARGS,
@@ -626,7 +627,7 @@ pub fn createSendCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     };
 
     // Create function object for send
-    const py_func = python.PyCFunction_New(&method_def, capsule);
+    const py_func = python.og.PyCFunction_New(&method_def, capsule);
 
     if (py_func == null) {
         decref(capsule.?);
@@ -648,6 +649,27 @@ pub fn callAsgiApplication(app: *python.PyObject, scope: *python.PyObject, recei
         std.debug.print("DEBUG: App is callable\n", .{});
     }
 
+    // Debug the receive object type
+    if (python.og.PyCallable_Check(receive) == 0) {
+        std.debug.print("DEBUG: receive is not callable!\n", .{});
+    } else {
+        std.debug.print("DEBUG: receive is callable\n", .{});
+    }
+
+    // Debug the send object type
+    if (python.og.PyCallable_Check(send) == 0) {
+        std.debug.print("DEBUG: send is not callable!\n", .{});
+    } else {
+        std.debug.print("DEBUG: send is callable\n", .{});
+    }
+
+    // Debug the scope object type
+    if (python.og.PyCallable_Check(scope) == 0) {
+        std.debug.print("DEBUG: scope is not callable!\n", .{});
+    } else {
+        std.debug.print("DEBUG: scope is callable\n", .{});
+    }
+
     // Run tuple operations test first
     // try testTupleOperations();
 
@@ -658,47 +680,47 @@ pub fn callAsgiApplication(app: *python.PyObject, scope: *python.PyObject, recei
     std.debug.print("DEBUG: receive: {*}\n", .{receive});
     std.debug.print("DEBUG: send: {*}\n", .{send});
 
-    // // Allocate tuple as var so we can clear it in case of error
-    // const args = python.og.PyTuple_New(3);
-    // if (args == null) {
-    //     std.debug.print("DEBUG: Failed to create args tuple\n", .{});
-    //     handlePythonError();
-    //     return PythonError.RuntimeError;
-    // }
+    // Allocate tuple as var so we can clear it in case of error
+    const args = python.og.PyTuple_New(3);
+    if (args == null) {
+        std.debug.print("DEBUG: Failed to create args tuple\n", .{});
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
 
-    // std.debug.print("DEBUG: Args tuple created successfully: {*}\n", .{args.?});
+    std.debug.print("DEBUG: Args tuple created successfully: {*}\n", .{args.?});
 
-    // // Create temporary copies of arguments
-    // std.debug.print("DEBUG: Creating temporary None values for tuple\n", .{});
-    // const temp_none = python.getPyNone();
-    // python.incref(temp_none);
-    // python.incref(temp_none);
-    // python.incref(temp_none);
+    // Create temporary copies of arguments
+    std.debug.print("DEBUG: Creating temporary None values for tuple\n", .{});
+    const temp_none = python.og.Py_None();
+    python.incref(temp_none);
+    python.incref(temp_none);
+    python.incref(temp_none);
 
-    // // Try setting the items to None first
-    // std.debug.print("DEBUG: Filling tuple with None values first\n", .{});
-    // if (python.PyTuple_SetItem(args.?, 0, send) < 0 or
-    //     python.PyTuple_SetItem(args.?, 1, scope) < 0 or
-    //     python.PyTuple_SetItem(args.?, 2, receive) < 0)
-    // {
-    //     std.debug.print("DEBUG: Failed to set None values in tuple\n", .{});
-    //     // Don't need to decref temp_none as it was stolen or failed
-    //     python.og.Py_DECREF(args.?);
-    //     handlePythonError();
-    //     return PythonError.RuntimeError;
-    // }
+    // Try setting the items to None first
+    std.debug.print("DEBUG: Filling tuple with None values first\n", .{});
+    if (python.og.PyTuple_SetItem(args.?, 0, temp_none) < 0 or
+        python.og.PyTuple_SetItem(args.?, 1, temp_none) < 0 or
+        python.og.PyTuple_SetItem(args.?, 2, temp_none) < 0)
+    {
+        std.debug.print("DEBUG: Failed to set None values in tuple\n", .{});
+        // Don't need to decref temp_none as it was stolen or failed
+        python.og.Py_DECREF(args.?);
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
 
-    // // std.debug.print("DEBUG: Successfully filled tuple with None values\n", .{});
+    // std.debug.print("DEBUG: Successfully filled tuple with None values\n", .{});
 
-    // // // Now try to replace with actual values one by one
-    // // std.debug.print("DEBUG: Replacing tuple items with actual arguments\n", .{});
+    // // Now try to replace with actual values one by one
+    // std.debug.print("DEBUG: Replacing tuple items with actual arguments\n", .{});
 
-    // // // We'll use a simpler approach - just pass None values instead of the real arguments
-    // // // This way we can test if the code path works at all
-    // // std.debug.print("DEBUG: Using None values instead of real arguments for now\n", .{});
+    // // We'll use a simpler approach - just pass None values instead of the real arguments
+    // // This way we can test if the code path works at all
+    // std.debug.print("DEBUG: Using None values instead of real arguments for now\n", .{});
 
-    // // // Call the application with the tuple of Nones
-    // // std.debug.print("DEBUG: Calling PyObject_CallObject with None tuple\n", .{});
+    // // Call the application with the tuple of Nones
+    // std.debug.print("DEBUG: Calling PyObject_CallObject with None tuple\n", .{});
     // const result = python.og.PyObject_CallObject(app, args.?);
     // python.decref(args.?);
 

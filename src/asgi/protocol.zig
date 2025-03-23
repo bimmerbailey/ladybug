@@ -58,12 +58,12 @@ pub const MessageQueue = struct {
 
     /// Receive a message from the queue, blocking if none is available
     pub fn receive(self: *Self) !json.Value {
-        std.debug.print("DEBUG: Receive message\n", .{});
+        std.debug.print("\nDEBUG: Receive message\n", .{});
         self.mutex.lock();
         defer self.mutex.unlock();
         std.debug.print("DEBUG: Locked mutex\n", .{});
         while (self.messages.items.len == 0) {
-            std.debug.print("DEBUG: Waiting for message\n", .{});
+            std.debug.print("DEBUG: Waiting for message", .{});
             self.condition.wait(&self.mutex);
             std.debug.print("DEBUG: Woken up\n", .{});
         }

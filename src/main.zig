@@ -9,6 +9,7 @@ const asgi = lib.asgi;
 const python = lib.python;
 const cli = lib.cli;
 const utils = lib.utils;
+const builtin = @import("builtin");
 
 pub fn main() !void {
     // Set up allocator
@@ -39,14 +40,27 @@ pub fn main() !void {
 
     // Handle multi-worker mode
     if (options.workers > 1) {
-        try runMaster(allocator, &options, &logger);
+        try runMaster(allocator, &options, &logger, app_info.module, app_info.attr);
     } else {
         try runWorker(allocator, &options, &logger, app_info.module, app_info.attr);
     }
 }
 
+const SignalHandler = struct {
+    flag: *bool,
+
+    fn handle(sig: c_int, handler_ptr: ?*anyopaque) callconv(.C) void {
+        std.debug.print("DEBUG: Singal handler\n", .{});
+        _ = sig;
+        if (handler_ptr) |ptr| {
+            const self = @as(*@This(), @ptrCast(ptr));
+            self.flag.* = true; // Set the flag to true when the signal is received
+        }
+    }
+};
+
 /// Run as master process, managing worker processes
-fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger) !void {
+fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger, module_name: []const u8, app_name: []const u8) !void {
     logger.info("Running in master mode with {d} workers", .{options.workers});
 
     // Create worker pool
@@ -60,22 +74,6 @@ fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     var sigterm_flag = false;
     var sigint_flag = false;
 
-    const SignalHandler = struct {
-        flag: *bool,
-
-        fn handle(sig: c_int, handler_ptr: ?*anyopaque) callconv(.C) void {
-            _ = sig;
-            if (handler_ptr) |ptr| {
-                // TODO: Fix this cast - the current implementation causes linter errors with argument count
-                // We're expecting a pointer to the struct itself passed as opaque pointer in the signal handler
-                const self = @as(*@This(), @ptrCast(ptr));
-                self.flag.* = true;
-            }
-        }
-    };
-
-    // TODO: These handlers don't appear directly used in the code but are referenced indirectly by the signal system.
-    // The handlers are stored in variables to maintain their lifetime for the duration of signal handling.
     var _term_handler = SignalHandler{ .flag = &sigterm_flag };
     var _int_handler = SignalHandler{ .flag = &sigint_flag };
 
@@ -83,9 +81,8 @@ fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     _ = &_term_handler;
     _ = &_int_handler;
 
-    const builtin = @import("builtin");
-
     if (builtin.os.tag != .macos and builtin.os.tag != .darwin) {
+        std.debug.print("DEBUG: Setting up signal handlers\n", .{});
         // On Linux and other Unix systems, use sigaction
         _ = std.os.sigaction(std.os.SIG.TERM, &.{
             .handler = .{ .handler = SignalHandler.handle },
@@ -100,11 +97,12 @@ fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
         }, null);
     } else {
         // On macOS, just print a message
+        std.debug.print("DEBUG: Shutting down hopefulyy\n", .{});
         logger.info("Signal handling limited on macOS. Use Ctrl+C to exit.", .{});
-        // We'll handle cleanup in the main loop with manual checks
     }
 
     // Main loop
+    try runWorker(allocator, options, logger, module_name, app_name);
     while (!sigterm_flag and !sigint_flag) {
         try pool.check();
         std.time.sleep(500 * std.time.ns_per_ms); // 500ms
@@ -148,9 +146,39 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
         std.debug.print("\nDEBUG: Lifespan protocol complete\n", .{});
     }
 
+    // Set up signal handling
+    var sigterm_flag = false;
+    var sigint_flag = false;
+
+    var _term_handler = SignalHandler{ .flag = &sigterm_flag };
+    var _int_handler = SignalHandler{ .flag = &sigint_flag };
+
+    _ = &_term_handler;
+    _ = &_int_handler;
+
+    if (builtin.os.tag != .macos and builtin.os.tag != .darwin) {
+        std.debug.print("DEBUG: Setting up signal handlers\n", .{});
+        // On Linux and other Unix systems, use sigaction
+        _ = std.os.sigaction(std.os.SIG.TERM, &.{
+            .handler = .{ .handler = SignalHandler.handle },
+            .mask = std.os.empty_sigset,
+            .flags = 0,
+        }, null);
+
+        _ = std.os.sigaction(std.os.SIG.INT, &.{
+            .handler = .{ .handler = SignalHandler.handle },
+            .mask = std.os.empty_sigset,
+            .flags = 0,
+        }, null);
+    } else {
+        // On macOS, just print a message
+        std.debug.print("DEBUG: Shutting down hopefulyy\n", .{});
+        logger.info("Signal handling limited on macOS. Use Ctrl+C to exit.", .{});
+    }
+
     std.debug.print("\nDEBUG: Starting connection loop\n", .{});
     // Handle connections
-    while (true) {
+    while (!sigterm_flag and !sigint_flag) {
         // Accept a new connection
         const conn = server.accept() catch |err| {
             logger.err("Error accepting connection: {!}", .{err});
@@ -247,7 +275,7 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
 
 /// Call the ASGI application for lifespan protocol
 fn callAppLifespan(app: *python.PyObject, scope: *python.PyObject, receive: *python.PyObject, send: *python.PyObject, logger: *const utils.Logger) void {
-    std.debug.print("\nDEBUG: Calling ASGI application from callAppLifespan app", .{});
+    std.debug.print("\nDEBUG: Calling ASGI application from callAppLifespan app\n\n", .{});
     // if (scope == null or receive == null or send == null) {
     //     std.debug.print("DEBUG: Something is null in callAppLifespan\n", .{});
     //     std.debug.print("DEBUG: App is null\n", .{});

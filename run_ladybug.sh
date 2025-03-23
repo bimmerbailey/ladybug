@@ -17,7 +17,7 @@ echo "New PYTHONPATH: $PYTHONPATH"
 # Run the Ladybug server with the provided arguments
 echo "Running: ./zig-out/bin/ladybug $@"
 echo "============================="
-./zig-out/bin/ladybug "$@"
+./zig-out/bin/ladybug -app tests.minimal_asgi:app "$@"
 
 
 # Store exit code
