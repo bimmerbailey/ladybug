@@ -1,7 +1,11 @@
 const std = @import("std");
+pub const og = @cImport({
+    @cDefine("PY_SSIZE_T_CLEAN", {});
+    @cInclude("Python.h");
+});
 
 // Define the basic PyObject type
-pub const PyObject = opaque {};
+pub const PyObject = og.PyObject;
 
 // Define PyMethodDef struct
 pub const PyMethodDef = extern struct {
