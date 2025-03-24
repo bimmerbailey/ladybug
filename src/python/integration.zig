@@ -44,6 +44,14 @@ pub const PythonError = error{
     Exception,
 };
 
+pub fn PyGILState_Ensure() python.og.PyGILState_STATE {
+    return python.og.PyGILState_Ensure();
+}
+
+pub fn PyGILState_Release(gil_state: python.og.PyGILState_STATE) void {
+    return python.og.PyGILState_Release(gil_state);
+}
+
 /// Initialize the Python interpreter
 pub fn initialize() !void {
     std.debug.print("DEBUG: Initializing Python interpreter\n", .{});
@@ -115,8 +123,6 @@ pub fn toPyString(string: []const u8) !*PyObject {
         handlePythonError();
         return PythonError.ValueError;
     }
-
-    std.debug.print("DEBUG: Converted string to PyObject: {*}\n", .{py_string.?});
     return py_string;
 }
 

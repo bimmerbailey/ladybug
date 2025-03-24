@@ -186,6 +186,7 @@ pub const Request = struct {
         if (self.body) |body| {
             allocator.free(body);
         }
+        std.debug.print("DEBUG: Deinitialized request\n", .{});
     }
 };
 
@@ -198,6 +199,7 @@ pub const Response = struct {
 
     /// Create a new response with default values
     pub fn init(allocator: Allocator) Response {
+        std.debug.print("DEBUG: Initializing response\n", .{});
         return Response{
             .status = 200,
             .headers = std.StringHashMap([]const u8).init(allocator),
@@ -258,6 +260,7 @@ pub const Response = struct {
 
     /// Free all memory allocated for the response
     pub fn deinit(self: *Response) void {
+        std.debug.print("DEBUG: Deinitializing response\n", .{});
         var iterator = self.headers.iterator();
         while (iterator.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -269,6 +272,99 @@ pub const Response = struct {
         if (self.body) |body| {
             self.allocator.free(body);
         }
+
+        std.debug.print("DEBUG: Deinitialized response\n", .{});
+    }
+};
+
+// TODO: move this to asgi/protocol.zig when figure out how to handle dependencies
+// ASGI Scope representation
+pub const AsgiScope = struct {
+    // Use a string hash map to represent the scope dictionary
+    scope: std.StringHashMap([]const u8),
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator) AsgiScope {
+        return AsgiScope{
+            .scope = std.StringHashMap([]const u8).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    /// Generate ASGI scope from an HTTP request
+    pub fn fromRequest(allocator: Allocator, request: *const Request) !AsgiScope {
+        var scope = AsgiScope.init(allocator);
+        errdefer scope.deinit();
+
+        // Required ASGI keys
+        try scope.put("type", "http");
+        try scope.put("asgi", "3.0");
+        try scope.put("http_version", request.version[5..]); // Remove "HTTP/" prefix
+        try scope.put("method", request.method);
+        try scope.put("scheme", "http"); // Default, could be expanded to detect HTTPS
+
+        // Path and query handling
+        try scope.put("path", request.path);
+
+        // Query string
+        if (request.query) |query| {
+            try scope.put("query_string", query);
+        } else {
+            try scope.put("query_string", "");
+        }
+
+        // Add headers
+        var header_iterator = request.headers.iterator();
+        while (header_iterator.next()) |entry| {
+            const header_name = entry.key_ptr.*;
+            const header_value = entry.value_ptr.*;
+
+            // Convert header to lowercase with '_' prefix for ASGI convention
+            var converted_name = try std.ArrayList(u8).initCapacity(allocator, header_name.len + 1);
+            defer converted_name.deinit();
+
+            converted_name.appendAssumeCapacity('_');
+            for (header_name) |char| {
+                converted_name.appendAssumeCapacity(std.ascii.toLower(char));
+            }
+
+            try scope.put(converted_name.items, header_value);
+        }
+
+        return scope;
+    }
+
+    /// Helper method to add a key-value pair to the scope
+    fn put(self: *AsgiScope, key: []const u8, value: []const u8) !void {
+        const key_dup = try self.allocator.dupe(u8, key);
+        const value_dup = try self.allocator.dupe(u8, value);
+
+        try self.scope.put(key_dup, value_dup);
+    }
+
+    /// Free all memory associated with the scope
+    pub fn deinit(self: *AsgiScope) void {
+        var iterator = self.scope.iterator();
+        while (iterator.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.scope.deinit();
+    }
+
+    pub fn toJsonValue(self: *const AsgiScope) !std.json.Value {
+        // Create a JSON object
+        var json_object = std.json.ObjectMap.init(self.allocator);
+        errdefer json_object.deinit();
+
+        // Iterate through the scope and add to JSON map
+        var iterator = self.scope.iterator();
+        while (iterator.next()) |entry| {
+            try json_object.put(entry.key_ptr.*, .{ .string = entry.value_ptr.* });
+        }
+
+        // Convert the object map to a JSON value
+        return std.json.Value{ .object = json_object };
     }
 };
 
