@@ -68,6 +68,9 @@ pub fn parseRequest(allocator: Allocator, stream: *net.Stream) !Request {
     const bytes_read = try stream.read(buffer);
     if (bytes_read == 0) return error.EmptyRequest;
 
+    std.debug.print("\nDEBUG: Parsing request\n", .{});
+    std.debug.print("DEBUG: Request buffer: {s}\n", .{buffer[0..bytes_read]});
+
     // Create a request object from the buffer
     return Request.parse(allocator, buffer[0..bytes_read]);
 }
@@ -82,65 +85,93 @@ pub const Request = struct {
     body: ?[]const u8 = null,
 
     /// Parse a raw HTTP request into a Request object
-    pub fn parse(allocator: Allocator, raw_request: []const u8) !Request {
-        // Simple parsing - in a real impl this would be more robust
-        var lines = std.mem.splitSequence(u8, raw_request, "\r\n");
+    pub fn parse(allocator: Allocator, buffer: []const u8) !Request {
+        var result = Request{
+            .method = "",
+            .path = "",
+            .version = "",
+            .headers = std.StringHashMap([]const u8).init(allocator),
+            .body = null,
+        };
 
-        // Parse request line
-        const request_line = lines.next() orelse return error.InvalidRequest;
-        var parts = std.mem.splitScalar(u8, request_line, ' ');
+        // Find the end of headers (double CRLF)
+        const header_end = std.mem.indexOf(u8, buffer, "\r\n\r\n") orelse return error.InvalidRequest;
 
-        const method = try allocator.dupe(u8, parts.next() orelse return error.InvalidMethod);
+        // Headers section (including request line)
+        const headers_section = buffer[0..header_end];
 
-        // Parse path and query
-        const raw_path = parts.next() orelse return error.InvalidPath;
-        var path_parts = std.mem.splitScalar(u8, raw_path, '?');
-        const path = try allocator.dupe(u8, path_parts.next() orelse return error.InvalidPath);
-        const query = if (path_parts.next()) |q| try allocator.dupe(u8, q) else null;
-
-        // Get the HTTP version (remove any trailing whitespace)
-        const version_raw = parts.next() orelse return error.InvalidVersion;
-        const version = try allocator.dupe(u8, std.mem.trim(u8, version_raw, &std.ascii.whitespace));
-
-        // Parse headers
-        var headers = std.StringHashMap([]const u8).init(allocator);
-
-        while (lines.next()) |line| {
-            if (line.len == 0) break; // End of headers
-
-            var header_parts = std.mem.splitScalar(u8, line, ':');
-            const name = try allocator.dupe(u8, header_parts.next() orelse continue);
-
-            var value_raw = header_parts.next() orelse continue;
-            // Trim leading space if present
-            if (value_raw.len > 0 and value_raw[0] == ' ') {
-                value_raw = value_raw[1..];
+        // Body starts after the double CRLF
+        if (header_end + 4 < buffer.len) {
+            const body_data = buffer[header_end + 4 ..];
+            // Only set body if there's actual content
+            if (body_data.len > 0) {
+                result.body = try allocator.dupe(u8, body_data);
             }
-            const value = try allocator.dupe(u8, value_raw);
-
-            try headers.put(name, value);
         }
 
-        // Return the parsed request
-        return Request{
-            .method = method,
-            .path = path,
-            .query = query,
-            .version = version,
-            .headers = headers,
-        };
+        // Split headers into lines
+        var lines = std.mem.splitSequence(u8, headers_section, "\r\n");
+
+        // First line is the request line
+        const request_line = lines.next() orelse return error.InvalidRequest;
+
+        // Parse request line (METHOD URI HTTP/VERSION)
+        var request_parts = std.mem.tokenizeSequence(u8, request_line, " ");
+
+        const method = request_parts.next() orelse return error.InvalidRequest;
+        result.method = try allocator.dupe(u8, method);
+
+        const uri = request_parts.next() orelse return error.InvalidRequest;
+
+        // Split URI into path and query if a question mark exists
+        if (std.mem.indexOf(u8, uri, "?")) |query_start| {
+            result.path = try allocator.dupe(u8, uri[0..query_start]);
+            result.query = try allocator.dupe(u8, uri[query_start + 1 ..]);
+        } else {
+            result.path = try allocator.dupe(u8, uri);
+        }
+
+        const version = request_parts.next() orelse return error.InvalidRequest;
+        result.version = try allocator.dupe(u8, version);
+
+        // Parse headers
+        while (lines.next()) |line| {
+            if (line.len == 0) continue; // Skip empty lines
+
+            const colon_pos = std.mem.indexOf(u8, line, ":") orelse return error.InvalidHeader;
+            const header_name = std.mem.trim(u8, line[0..colon_pos], &std.ascii.whitespace);
+            const header_value = std.mem.trim(u8, line[colon_pos + 1 ..], &std.ascii.whitespace);
+
+            const name_dup = try allocator.dupe(u8, header_name);
+            const value_dup = try allocator.dupe(u8, header_value);
+
+            try result.headers.put(name_dup, value_dup);
+        }
+
+        std.debug.print("DEBUG: Parsed request\n", .{});
+        std.debug.print("DEBUG: Method: {s}\n", .{result.method});
+        std.debug.print("DEBUG: Path: {s}\n", .{result.path});
+        // std.debug.print("DEBUG: Version: {s}\n", .{result.version});
+        // std.debug.print("DEBUG: Headers: {any}\n", .{result.headers});
+        // std.debug.print("DEBUG: Body: {s}\n", .{result.body});
+        return result;
     }
 
     /// Free all memory allocated for the request
     pub fn deinit(self: *Request) void {
+        std.debug.print("DEBUG: Deinitializing request\n", .{});
         const allocator = self.headers.allocator;
 
         // Free the method, path, etc.
         allocator.free(self.method);
+        std.debug.print("DEBUG: Freed method\n", .{});
         allocator.free(self.path);
+        std.debug.print("DEBUG: Freed path\n", .{});
         if (self.query) |q| allocator.free(q);
+        std.debug.print("DEBUG: Freed query\n", .{});
         allocator.free(self.version);
 
+        std.debug.print("DEBUG: Deinitializing headers\n", .{});
         // Free the header keys and values
         var iterator = self.headers.iterator();
         while (iterator.next()) |entry| {

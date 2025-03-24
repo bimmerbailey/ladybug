@@ -62,13 +62,15 @@ pub const MessageQueue = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         std.debug.print("DEBUG: Locked mutex\n", .{});
+
         while (self.messages.items.len == 0) {
-            std.debug.print("DEBUG: Waiting for message", .{});
+            std.debug.print("DEBUG: Queue is empty, waiting for message...\n", .{});
             self.condition.wait(&self.mutex);
-            std.debug.print("DEBUG: Woken up\n", .{});
+            std.debug.print("DEBUG: Woken up, checking for messages\n", .{});
         }
-        std.debug.print("DEBUG: Out of wait\n", .{});
+
         const message = self.messages.orderedRemove(0);
+        std.debug.print("DEBUG: Message received: {}\n", .{message});
         return message;
     }
 

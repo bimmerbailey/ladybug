@@ -49,16 +49,11 @@ pub fn initialize() !void {
     std.debug.print("DEBUG: Initializing Python interpreter\n", .{});
     if (python.og.Py_IsInitialized() == 0) {
         std.debug.print("DEBUG: Python not initialized, calling Py_Initialize()\n", .{});
-        python.og.Py_Initialize();
+        python.og.Py_InitializeEx(0);
         if (python.og.Py_IsInitialized() == 0) {
             std.debug.print("DEBUG: Python initialization failed\n", .{});
             return PythonError.InitFailed;
         }
-
-        // Add current directory to Python's path
-        std.debug.print("DEBUG: Python path management is handled by the wrapper script\n", .{});
-        std.debug.print("DEBUG: Skipping programmatic modification of sys.path\n", .{});
-        // Skip the sys.path modification since we're using PYTHONPATH in the wrapper script
     } else {
         std.debug.print("DEBUG: Python already initialized\n", .{});
     }
@@ -66,13 +61,22 @@ pub fn initialize() !void {
 
 /// Finalize the Python interpreter
 pub fn finalize() void {
+    std.debug.print("DEBUG: Finalizing Python interpreter\n", .{});
     if (python.og.Py_IsInitialized() != 0) {
-        python.og.Py_Finalize();
+        _ = python.og.Py_FinalizeEx();
+    }
+}
+
+/// Check if a Python object pointer is null and handle the error
+fn checkPyObjectNotNull(obj: *PyObject, errorMessage: []const u8) !void {
+    if (obj == null) {
+        std.debug.print("ERROR: {s} is null!\n", .{errorMessage});
+        return PythonError.RuntimeError; // Return an appropriate error
     }
 }
 
 /// Import a Python module
-pub fn importModule(module_name: []const u8) !*python.PyObject {
+pub fn importModule(module_name: []const u8) !*PyObject {
     std.debug.print("DEBUG: Importing module: {s}\n", .{module_name});
     const py_name = try toPyString(module_name);
     defer decref(py_name);
@@ -86,11 +90,11 @@ pub fn importModule(module_name: []const u8) !*python.PyObject {
     }
 
     std.debug.print("DEBUG: Successfully imported module {s}\n", .{module_name});
-    return module.?;
+    return module;
 }
 
 /// Get an attribute from a Python object
-pub fn getAttribute(object: *python.PyObject, attr_name: []const u8) !*python.PyObject {
+pub fn getAttribute(object: *PyObject, attr_name: []const u8) !*PyObject {
     std.debug.print("DEBUG: Getting attribute: {s}\n", .{attr_name});
     const py_name = try toPyString(attr_name);
     defer decref(py_name);
@@ -101,11 +105,11 @@ pub fn getAttribute(object: *python.PyObject, attr_name: []const u8) !*python.Py
         return PythonError.AttributeNotFound;
     }
 
-    return attr.?;
+    return attr;
 }
 
 /// Convert a Zig string to a Python string
-pub fn toPyString(string: []const u8) !*python.PyObject {
+pub fn toPyString(string: []const u8) !*PyObject {
     const py_string = python.og.PyUnicode_FromStringAndSize(string.ptr, @intCast(string.len));
     if (py_string == null) {
         handlePythonError();
@@ -113,7 +117,7 @@ pub fn toPyString(string: []const u8) !*python.PyObject {
     }
 
     std.debug.print("DEBUG: Converted string to PyObject: {*}\n", .{py_string.?});
-    return py_string.?;
+    return py_string;
 }
 
 /// Convert a Python string to a Zig string
@@ -161,16 +165,20 @@ pub fn loadApplication(module_path: []const u8, app_name: []const u8) !*python.P
 
 /// Create a Python dict from a JSON object
 pub fn createPyDict(allocator: Allocator, json_obj: std.json.Value) !*python.PyObject {
+    std.debug.print("DEBUG: Creating Python dict from JSON object\n", .{});
     if (json_obj != .object) {
         return PythonError.TypeError;
     }
 
+    std.debug.print("DEBUG: Creating empty Python dict\n", .{});
     const dict = python.og.PyDict_New();
     if (dict == null) {
+        std.debug.print("DEBUG: Python dict creation failed\n", .{});
         handlePythonError();
         return PythonError.RuntimeError;
     }
 
+    std.debug.print("DEBUG: Iterating over JSON object\n", .{});
     var it = json_obj.object.iterator();
     while (it.next()) |entry| {
         const key = try toPyString(entry.key_ptr.*);
@@ -185,7 +193,7 @@ pub fn createPyDict(allocator: Allocator, json_obj: std.json.Value) !*python.PyO
             return PythonError.RuntimeError;
         }
     }
-
+    std.debug.print("DEBUG: Python dict created\n", .{});
     return dict.?;
 }
 
@@ -292,41 +300,41 @@ pub fn jsonToPyObject(allocator: Allocator, json_value: std.json.Value) !*python
 
 /// Convert a Python object to a JSON value
 pub fn pyObjectToJson(allocator: Allocator, py_obj: *python.PyObject) !std.json.Value {
-    if (python.PyBool_Check(py_obj) != 0) {
+    if (python.og.PyBool_Check(py_obj) != 0) {
         const py_true = python.getPyTrue();
         return std.json.Value{ .bool = py_obj == py_true };
-    } else if (python.PyLong_Check(py_obj) != 0) {
-        const value = python.PyLong_AsLongLong(py_obj);
-        if (value == -1 and python.PyErr_Occurred() != null) {
+    } else if (python.og.PyLong_Check(py_obj) != 0) {
+        const value = python.og.PyLong_AsLongLong(py_obj);
+        if (value == -1 and python.og.PyErr_Occurred() != null) {
             handlePythonError();
             return PythonError.ValueError;
         }
         return std.json.Value{ .integer = value };
-    } else if (python.PyFloat_Check(py_obj) != 0) {
-        const value = python.PyFloat_AsDouble(py_obj);
-        if (value == -1.0 and python.PyErr_Occurred() != null) {
+    } else if (python.og.PyFloat_Check(py_obj) != 0) {
+        const value = python.og.PyFloat_AsDouble(py_obj);
+        if (value == -1.0 and python.og.PyErr_Occurred() != null) {
             handlePythonError();
             return PythonError.ValueError;
         }
         return std.json.Value{ .float = value };
-    } else if (python.PyUnicode_Check(py_obj) != 0) {
+    } else if (python.og.PyUnicode_Check(py_obj) != 0) {
         const str = try fromPyString(allocator, py_obj);
         return std.json.Value{ .string = str };
-    } else if (python.PyBytes_Check(py_obj) != 0) {
+    } else if (python.og.PyBytes_Check(py_obj) != 0) {
         var size: c_long = undefined;
         var bytes_ptr: [*c]u8 = undefined;
-        const result = python.PyBytes_AsStringAndSize(py_obj, &bytes_ptr, &size);
+        const result = python.og.PyBytes_AsStringAndSize(py_obj, &bytes_ptr, &size);
         if (result < 0) {
             handlePythonError();
             return PythonError.ValueError;
         }
         const data = try allocator.dupe(u8, bytes_ptr[0..@intCast(size)]);
         return std.json.Value{ .string = data };
-    } else if (python.PyList_Check(py_obj) != 0 or python.PyTuple_Check(py_obj) != 0) {
-        const size = if (python.PyList_Check(py_obj) != 0)
-            python.PyList_Size(py_obj)
+    } else if (python.og.PyList_Check(py_obj) != 0 or python.og.PyTuple_Check(py_obj) != 0) {
+        const size = if (python.og.PyList_Check(py_obj) != 0)
+            python.og.PyList_Size(py_obj)
         else
-            python.PyTuple_Size(py_obj);
+            python.og.PyTuple_Size(py_obj);
 
         if (size < 0) {
             handlePythonError();
@@ -339,10 +347,10 @@ pub fn pyObjectToJson(allocator: Allocator, py_obj: *python.PyObject) !std.json.
 
         var i: c_long = 0;
         while (i < size) : (i += 1) {
-            const item = if (python.PyList_Check(py_obj) != 0)
-                python.PyList_GetItem(py_obj, i)
+            const item = if (python.og.PyList_Check(py_obj) != 0)
+                python.og.PyList_GetItem(py_obj, i)
             else
-                python.PyTuple_GetItem(py_obj, i);
+                python.og.PyTuple_GetItem(py_obj, i);
 
             if (item == null) {
                 // Free the array items we've already added - manually free each item
@@ -365,7 +373,7 @@ pub fn pyObjectToJson(allocator: Allocator, py_obj: *python.PyObject) !std.json.
         }
 
         return array;
-    } else if (python.PyDict_Check(py_obj) != 0) {
+    } else if (python.og.PyDict_Check(py_obj) != 0) {
         var object = std.json.Value{
             .object = std.json.ObjectMap.init(allocator),
         };
@@ -374,10 +382,10 @@ pub fn pyObjectToJson(allocator: Allocator, py_obj: *python.PyObject) !std.json.
         var key: ?*python.PyObject = undefined;
         var value: ?*python.PyObject = undefined;
 
-        while (python.PyDict_Next(py_obj, @ptrCast(&pos), &key, &value) != 0) {
+        while (python.og.PyDict_Next(py_obj, @ptrCast(&pos), &key, &value) != 0) {
             if (key == null or value == null) continue;
 
-            if (python.PyUnicode_Check(key.?) == 0) {
+            if (python.og.PyUnicode_Check(key.?) == 0) {
                 protocol.jsonValueDeinit(object, allocator);
                 return PythonError.TypeError;
             }
@@ -664,10 +672,10 @@ pub fn callAsgiApplication(app: *python.PyObject, scope: *python.PyObject, recei
     }
 
     // Debug the scope object type
-    if (python.og.PyCallable_Check(scope) == 0) {
-        std.debug.print("DEBUG: scope is not callable!\n", .{});
+    if (python.og.PyDict_Check(scope) == 0) {
+        std.debug.print("DEBUG: scope is not a dict!\n", .{});
     } else {
-        std.debug.print("DEBUG: scope is callable\n", .{});
+        std.debug.print("DEBUG: scope is a dict\n", .{});
     }
 
     // Run tuple operations test first
@@ -738,125 +746,10 @@ pub fn callAsgiApplication(app: *python.PyObject, scope: *python.PyObject, recei
 }
 
 // Helper function to replace all Py_INCREF and Py_DECREF calls throughout the file
-pub fn incref(obj: *python.PyObject) void {
+pub fn incref(obj: *PyObject) void {
     python.og.Py_INCREF(obj);
 }
 
-pub fn decref(obj: *python.PyObject) void {
+pub fn decref(obj: *PyObject) void {
     python.og.Py_DECREF(obj);
 }
-
-// Test function to debug tuple creation and manipulation
-// fn testTupleOperations() !void {
-//     std.debug.print("=== Starting tuple operations test ===\n", .{});
-
-//     // Test 1: Create empty tuple
-//     std.debug.print("Test 1: Creating empty tuple\n", .{});
-//     const empty_tuple = python.PyTuple_New(0);
-//     if (empty_tuple == null) {
-//         std.debug.print("Failed to create empty tuple\n", .{});
-//         return PythonError.RuntimeError;
-//     }
-//     std.debug.print("Empty tuple created: {*}\n", .{empty_tuple.?});
-//     python.decref(empty_tuple.?);
-
-//     // Test 2: Create size 1 tuple and set None
-//     std.debug.print("Test 2: Creating size 1 tuple\n", .{});
-//     const single_tuple = python.PyTuple_New(1);
-//     if (single_tuple == null) {
-//         std.debug.print("Failed to create size 1 tuple\n", .{});
-//         return PythonError.RuntimeError;
-//     }
-//     std.debug.print("Size 1 tuple created: {*}\n", .{single_tuple.?});
-
-//     // Get None and set it in the tuple
-//     const none = python.getPyNone();
-//     python.incref(none); // Increment because SetItem steals reference
-//     if (python.PyTuple_SetItem(single_tuple.?, 0, none) < 0) {
-//         std.debug.print("Failed to set None in tuple\n", .{});
-//         python.decref(none);
-//         python.decref(single_tuple.?);
-//         return PythonError.RuntimeError;
-//     }
-//     python.decref(single_tuple.?);
-
-//     // Test 3: Create size 2 tuple
-//     std.debug.print("Test 3: Creating size 2 tuple\n", .{});
-//     const double_tuple = python.PyTuple_New(2);
-//     if (double_tuple == null) {
-//         std.debug.print("Failed to create size 2 tuple\n", .{});
-//         return PythonError.RuntimeError;
-//     }
-//     std.debug.print("Size 2 tuple created: {*}\n", .{double_tuple.?});
-
-//     // Set both items to None
-//     const none2 = python.getPyNone();
-//     const none3 = python.getPyNone();
-//     python.incref(none2);
-//     python.incref(none3);
-
-//     if (python.PyTuple_SetItem(double_tuple.?, 0, none2) < 0) {
-//         std.debug.print("Failed to set first None in size 2 tuple\n", .{});
-//         python.decref(none2);
-//         python.decref(none3);
-//         python.decref(double_tuple.?);
-//         return PythonError.RuntimeError;
-//     }
-
-//     if (python.PyTuple_SetItem(double_tuple.?, 1, none3) < 0) {
-//         std.debug.print("Failed to set second None in size 2 tuple\n", .{});
-//         python.decref(none3);
-//         python.decref(double_tuple.?);
-//         return PythonError.RuntimeError;
-//     }
-
-//     python.decref(double_tuple.?);
-
-//     // Test 4: Create size 3 tuple (the size we actually need)
-//     std.debug.print("Test 4: Creating size 3 tuple\n", .{});
-//     const triple_tuple = python.PyTuple_New(3);
-//     if (triple_tuple == null) {
-//         std.debug.print("Failed to create size 3 tuple\n", .{});
-//         return PythonError.RuntimeError;
-//     }
-//     std.debug.print("Size 3 tuple created: {*}\n", .{triple_tuple.?});
-
-//     // Set all items to None one at a time
-//     const none4 = python.getPyNone();
-//     const none5 = python.getPyNone();
-//     const none6 = python.getPyNone();
-//     python.incref(none4);
-//     python.incref(none5);
-//     python.incref(none6);
-
-//     std.debug.print("Setting first item in triple tuple\n", .{});
-//     if (python.PyTuple_SetItem(triple_tuple.?, 0, none4) < 0) {
-//         std.debug.print("Failed to set first None in size 3 tuple\n", .{});
-//         python.decref(none4);
-//         python.decref(none5);
-//         python.decref(none6);
-//         python.decref(triple_tuple.?);
-//         return PythonError.RuntimeError;
-//     }
-
-//     std.debug.print("Setting second item in triple tuple\n", .{});
-//     if (python.PyTuple_SetItem(triple_tuple.?, 1, none5) < 0) {
-//         std.debug.print("Failed to set second None in size 3 tuple\n", .{});
-//         python.decref(none5);
-//         python.decref(none6);
-//         python.decref(triple_tuple.?);
-//         return PythonError.RuntimeError;
-//     }
-
-//     std.debug.print("Setting third item in triple tuple\n", .{});
-//     if (python.PyTuple_SetItem(triple_tuple.?, 2, none6) < 0) {
-//         std.debug.print("Failed to set third None in size 3 tuple\n", .{});
-//         python.decref(none6);
-//         python.decref(triple_tuple.?);
-//         return PythonError.RuntimeError;
-//     }
-
-//     python.decref(triple_tuple.?);
-
-//     std.debug.print("=== Tuple operations test completed successfully ===\n", .{});
-// }
