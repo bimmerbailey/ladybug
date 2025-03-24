@@ -16,8 +16,6 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-
-    // // Start listening
     // Parse command line arguments
     var options = cli.Options.init();
     const args = try std.process.argsAlloc(allocator);
@@ -25,13 +23,10 @@ pub fn main() !void {
 
     try options.parseArgs(allocator, args);
     defer options.deinit(allocator);
+
     // Setup logging
     const log_level = utils.Logger.LogLevel.fromString(options.log_level);
     const logger = utils.Logger.init(log_level, options.use_colors);
-
-    // Set up Python interpreter
-    try python.initialize();
-    defer python.finalize();
 
     // Parse module:app string
     const app_info = try options.parseApp(allocator);
@@ -40,9 +35,93 @@ pub fn main() !void {
         allocator.free(app_info.attr);
     }
 
+    logger.info("Starting ladybug ASGI server...", .{});
+    // Handle multi-worker mode
+    if (options.workers > 1) {
+        // TODO: Implement master process
+        try runMaster(allocator, &options, &logger);
+    } else {
+        try runWorker(allocator, &options, &logger, app_info.module, app_info.attr);
+    }
+}
+
+const SignalHandler = struct {
+    flag: *bool,
+
+    fn handle(sig: c_int, handler_ptr: ?*anyopaque) callconv(.C) void {
+        std.debug.print("DEBUG: Singal handler\n", .{});
+        _ = sig;
+        if (handler_ptr) |ptr| {
+            const self = @as(*@This(), @ptrCast(ptr));
+            self.flag.* = true; // Set the flag to true when the signal is received
+        }
+    }
+};
+
+/// Run as master process, managing worker processes
+fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger) !void {
+    logger.info("Running in master mode with {d} workers", .{options.workers});
+
+    // Create worker pool
+    var pool = utils.WorkerPool.init(allocator, options.workers, options.app, options.host, options.port);
+    defer pool.deinit();
+
+    // Start worker processes
+    try pool.start();
+
+    // Set up signal handling
+    var sigterm_flag = false;
+    var sigint_flag = false;
+
+    // TODO: These handlers don't appear directly used in the code but are referenced indirectly by the signal system.
+    // The handlers are stored in variables to maintain their lifetime for the duration of signal handling.
+    var _term_handler = SignalHandler{ .flag = &sigterm_flag };
+    var _int_handler = SignalHandler{ .flag = &sigint_flag };
+
+    // Tell the compiler these variables are intentionally here, even if not directly referenced
+    _ = &_term_handler;
+    _ = &_int_handler;
+
+    if (builtin.os.tag != .macos and builtin.os.tag != .darwin) {
+        // On Linux and other Unix systems, use sigaction
+        _ = std.os.sigaction(std.os.SIG.TERM, &.{
+            .handler = .{ .handler = SignalHandler.handle },
+            .mask = std.os.empty_sigset,
+            .flags = 0,
+        }, null);
+
+        _ = std.os.sigaction(std.os.SIG.INT, &.{
+            .handler = .{ .handler = SignalHandler.handle },
+            .mask = std.os.empty_sigset,
+            .flags = 0,
+        }, null);
+    } else {
+        // On macOS, just print a message
+        logger.info("Signal handling limited on macOS. Use Ctrl+C to exit.", .{});
+        // We'll handle cleanup in the main loop with manual checks
+    }
+
+    // Main loop
+    while (!sigterm_flag and !sigint_flag) {
+        try pool.check();
+        std.time.sleep(500 * std.time.ns_per_ms); // 500ms
+    }
+
+    // Stop worker processes
+    logger.info("Shutting down...", .{});
+    pool.stop();
+}
+
+fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger, module_name: []const u8, app_name: []const u8) !void {
+    std.debug.print("DEBUG: Running worker\n", .{});
+
+    // Set up Python interpreter
+    try python.initialize();
+    defer python.finalize();
+
     // Load ASGI application
-    // logger.info("Loading ASGI application from ", .{});
-    const app = try python.loadApplication(app_info.module, app_info.attr);
+    logger.info("Loading ASGI application from {s}:{s}", .{ module_name, app_name });
+    const app = try python.loadApplication(module_name, app_name);
     defer python.decref(app);
 
     const py_scope = try python.toPyString("Here we go");
@@ -75,7 +154,7 @@ pub fn main() !void {
         const conn_copy = try allocator.create(std.net.Server.Connection);
         conn_copy.* = conn;
 
-        try handleConnection(allocator, conn_copy, app, &logger);
+        try handleConnection(allocator, conn_copy, app, logger);
         // Process the request in a separate thread
         // const thread = try std.Thread.spawn(.{}, handleConnection, .{
         //     allocator, conn_copy, app, &logger,
@@ -83,19 +162,6 @@ pub fn main() !void {
         // thread.detach();
     }
 }
-
-const SignalHandler = struct {
-    flag: *bool,
-
-    fn handle(sig: c_int, handler_ptr: ?*anyopaque) callconv(.C) void {
-        std.debug.print("DEBUG: Singal handler\n", .{});
-        _ = sig;
-        if (handler_ptr) |ptr| {
-            const self = @as(*@This(), @ptrCast(ptr));
-            self.flag.* = true; // Set the flag to true when the signal is received
-        }
-    }
-};
 
 /// Handle an HTTP connection
 fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Connection, app: *python.PyObject, logger: *const utils.Logger) !void {
