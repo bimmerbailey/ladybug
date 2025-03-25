@@ -141,8 +141,14 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     try server.start();
     logger.info("Listening on http://{s}:{d}", .{ server_config.host, server_config.port });
 
-    // TODO: If more than one worker use multiprocessing
+    std.debug.print("DEBUG: Should run lifespan protocol: {s}\n", .{options.lifespan});
+    // Run the lifespan protocol if enabled
+    if (!std.mem.eql(u8, options.lifespan, "off")) {
+        std.debug.print("DEBUG: Starting lifespan protocol\n", .{});
+        try handleLifespan(allocator, app, logger);
+    }
 
+    // TODO: If more than one worker use multiprocessing
     // Accept and handle connections
     while (true) {
         const conn = server.accept() catch |err| {
@@ -249,4 +255,80 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     // Send the response
     std.debug.print("DEBUG: Sending response\n", .{});
     try response.send(&connection.stream);
+}
+
+/// Handle the lifespan protocol for startup/shutdown events
+fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *const utils.Logger) !void {
+    logger.debug("Running lifespan protocol", .{});
+
+    // Create message queues
+    var to_app = asgi.MessageQueue.init(allocator);
+    defer to_app.deinit();
+
+    var from_app = asgi.MessageQueue.init(allocator);
+    defer from_app.deinit();
+
+    std.debug.print("DEBUG: Creating lifespan scope\n", .{});
+    // Create scope
+    const scope = try asgi.createLifespanScope(allocator);
+    defer asgi.jsonValueDeinit(scope, allocator);
+
+    std.debug.print("DEBUG: Creating Python scope\n", .{});
+    // Create Python scope dict
+    const py_scope = try python.createPyDict(allocator, scope);
+    defer python.decref(py_scope);
+
+    std.debug.print("DEBUG: Creating receive callable\n", .{});
+    // Create callables
+    const receive = try python.createReceiveCallable(&to_app);
+    defer python.decref(receive);
+
+    std.debug.print("DEBUG: Creating send callable\n", .{});
+    const send = try python.createSendCallable(&from_app);
+    defer python.decref(send);
+
+    std.debug.print("DEBUG: Creating startup message\n", .{});
+    // Send startup message
+    const startup_msg = try asgi.createLifespanStartupMessage(allocator);
+    defer asgi.jsonValueDeinit(startup_msg, allocator);
+    try to_app.push(startup_msg);
+
+    // Call the application (don't wait for it to complete)
+    // const app_thread = try std.Thread.spawn(.{}, callAppLifespan, .{
+    //     app, py_scope, receive, send, logger,
+    // });
+    callAppLifespan(app, py_scope, receive, send, logger);
+    // Wait for startup.complete or startup.failed
+    while (true) {
+        var event = try from_app.receive();
+        defer asgi.jsonValueDeinit(event, allocator);
+
+        // Check event type
+        const type_value = event.object.get("type") orelse continue;
+        if (type_value != .string) continue;
+
+        if (std.mem.eql(u8, type_value.string, "lifespan.startup.complete")) {
+            logger.info("Lifespan startup complete", .{});
+            break;
+        } else if (std.mem.eql(u8, type_value.string, "lifespan.startup.failed")) {
+            logger.err("Lifespan startup failed", .{});
+            const message = event.object.get("message") orelse continue;
+            if (message == .string) {
+                logger.err("Reason: {s}", .{message.string});
+            }
+            break;
+        }
+    }
+
+    // Don't wait for the thread to complete - it will run for the lifetime of the application
+    // app_thread.detach();
+}
+
+/// Call the ASGI application for lifespan protocol
+fn callAppLifespan(app: *python.PyObject, scope: *python.PyObject, receive: *python.PyObject, send: *python.PyObject, logger: *const utils.Logger) void {
+    logger.debug("Calling ASGI application for lifespan", .{});
+
+    python.callAsgiApplication(app, scope, receive, send) catch |err| {
+        logger.err("Error calling ASGI application for lifespan: {!}", .{err});
+    };
 }
