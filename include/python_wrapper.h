@@ -5,6 +5,9 @@
 #ifndef PYTHON_WRAPPER_H
 #define PYTHON_WRAPPER_H
 
+// Include stddef.h for size_t
+#include <stddef.h>
+
 // Only include these definitions if Python.h is not already included
 #ifndef _PYTHON_H
 
@@ -12,6 +15,13 @@
 typedef struct _object PyObject;
 typedef int Py_ssize_t;
 typedef unsigned char uint8_t;
+
+// Vectorcall definitions
+#define PY_VECTORCALL_ARGUMENTS_OFFSET ((size_t)1 << (8 * sizeof(size_t) - 1))
+typedef PyObject *(*vectorcallfunc)(PyObject *callable, PyObject *const *args, size_t nargsf, PyObject *kwnames);
+
+// Slot numbers for vectorcall
+#define Py_tp_vectorcall_offset 48
 
 // Declare our own struct to replace the opaque one
 typedef struct {

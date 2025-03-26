@@ -10,6 +10,7 @@ const protocol = @import("protocol");
 
 // Export the PyObject type for external use
 pub const PyObject = python.og.PyObject;
+const PyTypeObject = python.og.PyTypeObject;
 
 /// Workaround functions to access Python constants safely
 fn getPyNone() *PyObject {
@@ -419,7 +420,8 @@ fn getNoneForCallback() ?*PyObject {
 
 /// Function to be called from Python's receive() callable
 fn pyReceiveCallback(self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject {
-    std.debug.print("\nDEBUG: pyReceiveCallback called with self: {*}, args: {*}\n", .{ self, args });
+    _ = args; // Unused
+    std.debug.print("\nDEBUG: pyReceiveCallback called with\n", .{});
 
     // Expecting self to be a pointer to a Message Queue
     if (python.PyCapsule_CheckExact(self) == 0) {
@@ -591,17 +593,18 @@ fn pySendCallback(self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject {
 
 /// Create a Python receive callable for ASGI
 pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
+    _ = queue; // Unused
     // Create capsule to hold the queue pointer
-    const capsule = python.og.PyCapsule_New(queue, "MessageQueue", null);
-    if (capsule == null) {
-        handlePythonError();
-        return PythonError.RuntimeError;
-    }
+    // const capsule = python.og.PyCapsule_New(queue, "MessageQueue", null);
+    // if (capsule == null) {
+    //     handlePythonError();
+    //     return PythonError.RuntimeError;
+    // }
 
     // Import types module to get coroutine decorator
     const types = python.og.PyImport_ImportModule("types");
     if (types == null) {
-        decref(capsule.?);
+        // decref(capsule.?);
         handlePythonError();
         return PythonError.ModuleNotFound;
     }
@@ -616,11 +619,18 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
         .ml_doc = "ASGI receive callable",
     };
 
+    // var method_def = python.og.PyMethodDef{
+    //     .ml_name = "receive",
+    //     .ml_meth = @as(python.og.PyCFunction, @ptrCast(&pyReceiveCallback)),
+    //     .ml_flags = python.og.METH_FASTCALL,
+    //     .ml_doc = "ASGI receive callable",
+    // };
+
     std.debug.print("DEBUG: Creating function object!\n", .{});
     // Create a function that returns a future
-    const py_func = python.og.PyCFunction_New(&method_def, capsule);
+    const py_func = python.og.PyCFunction_New(&method_def, null);
     if (py_func == null) {
-        decref(capsule.?);
+        // decref(capsule.?);
         handlePythonError();
         return PythonError.RuntimeError;
     }
@@ -629,7 +639,7 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     const coroutine_decorator = python.og.PyObject_GetAttrString(types.?, "coroutine");
     if (coroutine_decorator == null) {
         decref(py_func.?);
-        decref(capsule.?);
+        // decref(capsule.?);
         handlePythonError();
         return PythonError.RuntimeError;
     }
@@ -639,7 +649,7 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     const args = python.og.PyTuple_New(1);
     if (args == null) {
         decref(py_func.?);
-        decref(capsule.?);
+        // decref(capsule.?);
         handlePythonError();
         return PythonError.RuntimeError;
     }
@@ -649,7 +659,7 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     python.incref(py_func.?);
     if (python.og.PyTuple_SetItem(args.?, 0, py_func.?) < 0) {
         decref(py_func.?);
-        decref(capsule.?);
+        // decref(capsule.?);
         handlePythonError();
         return PythonError.RuntimeError;
     }
@@ -659,7 +669,7 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     const wrapped_func = python.og.PyObject_CallObject(coroutine_decorator.?, args.?);
     if (wrapped_func == null) {
         decref(py_func.?);
-        decref(capsule.?);
+        // decref(capsule.?);
         handlePythonError();
         return PythonError.RuntimeError;
     }
@@ -668,6 +678,98 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
     decref(py_func.?);
     std.debug.print("DEBUG: Returning wrapped function!\n", .{});
     return wrapped_func.?;
+}
+
+pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
+    _ = callable;
+    _ = args;
+    _ = nargs;
+
+    const body = "{ \"message\": \"Hello from Zig!\" }";
+
+    const dict = python.og.PyDict_New();
+    if (dict == null) return python.getPyNone();
+    _ = python.og.PyDict_SetItemString(dict, "type", python.og.PyUnicode_FromString("http.request"));
+    _ = python.og.PyDict_SetItemString(dict, "body", python.og.PyBytes_FromString(body));
+
+    return dict;
+}
+
+pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
+    _ = callable;
+    _ = nargs;
+
+    // Ensure we have exactly one argument
+    if (python.PyTuple_Size(args) != 1) {
+        _ = python.og.PyErr_SetString(python.PyExc_TypeError, "Expected exactly one argument");
+        return null;
+    }
+
+    // We won't try to access the queue directly for now, as that was causing the bus error
+    // Instead we'll just acknowledge the message for the lifespan protocol
+
+    // Get the message argument - this is just a borrowed reference
+    const message = python.og.PyTuple_GetItem(args, 0);
+    if (message == null) {
+        return null;
+    }
+
+    // const event_type = python.og.PyDict_GetItemString(args, "type");
+    // if (event_type == null) return null;
+
+    const event_type_str = python.og.PyUnicode_AsUTF8(message.?);
+    std.debug.print("DEBUG: Received event type: {s}\n", .{event_type_str});
+    if (std.mem.eql(u8, event_type_str, "http.response.start")) {
+        std.debug.print("Received response headers\n", .{});
+    } else if (std.mem.eql(u8, event_type_str, "http.response.body")) {
+        const body = python.og.PyDict_GetItemString(args, "body");
+        if (body != null) {
+            const body_bytes = python.og.PyBytes_AsString(body);
+            std.debug.print("Received body: {s}\n", .{body_bytes});
+        }
+    }
+
+    return python.getPyNone();
+}
+
+var ReceiveType = PyTypeObject{
+    .ob_base = undefined,
+    .tp_name = "ReceiveCallable",
+    .tp_basicsize = @sizeOf(python.PyObject),
+    .tp_itemsize = 0,
+    .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
+    .tp_call = @ptrCast(&asgi_receive_vectorcall),
+};
+
+pub fn create_receive_vectorcall_callable() !*python.PyObject {
+    if (python.og.PyType_Ready(&ReceiveType) < 0) return error.PythonTypeInitFailed;
+
+    // Use PyType_GenericAlloc to create an instance of the type
+    // This is the correct way to instantiate a Python type object
+    const instance = python.og.PyType_GenericAlloc(@ptrCast(&ReceiveType), 0);
+    if (instance == null) return error.PythonAllocationFailed;
+
+    return instance;
+}
+
+var SendType = PyTypeObject{
+    .ob_base = undefined,
+    .tp_name = "SendCallable",
+    .tp_basicsize = @sizeOf(python.PyObject),
+    .tp_itemsize = 0,
+    .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
+    .tp_call = @ptrCast(&asgi_send_vectorcall),
+};
+
+pub fn create_send_vectorcall_callable() !*python.PyObject {
+    if (python.og.PyType_Ready(&SendType) < 0) return error.PythonTypeInitFailed;
+
+    // Use PyType_GenericAlloc to create an instance of the type
+    // This is the correct way to instantiate a Python type object
+    const instance = python.og.PyType_GenericAlloc(@ptrCast(&ReceiveType), 0);
+    if (instance == null) return error.PythonAllocationFailed;
+
+    return instance;
 }
 
 /// Create a Python send callable for ASGI

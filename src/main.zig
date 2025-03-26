@@ -280,11 +280,13 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
 
     std.debug.print("DEBUG: Creating receive callable\n", .{});
     // Create callables
-    const receive = try python.createReceiveCallable(&to_app);
+    // const receive = try python.createReceiveCallable(&to_app);
+    const receive = try python.create_receive_vectorcall_callable();
     defer python.decref(receive);
 
     std.debug.print("DEBUG: Creating send callable\n", .{});
     const send = try python.createSendCallable(&from_app);
+    // const send = try python.create_send_vectorcall_callable();
     defer python.decref(send);
 
     std.debug.print("DEBUG: Creating startup message\n", .{});
@@ -297,7 +299,7 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
     // const app_thread = try std.Thread.spawn(.{}, callAppLifespan, .{
     //     app, py_scope, receive, send, logger,
     // });
-    callAppLifespan(app, py_scope, receive, send, logger);
+    try callAppLifespan(app, py_scope, receive, send, logger);
     // Wait for startup.complete or startup.failed
     while (true) {
         var event = try from_app.receive();
@@ -325,10 +327,12 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
 }
 
 /// Call the ASGI application for lifespan protocol
-fn callAppLifespan(app: *python.PyObject, scope: *python.PyObject, receive: *python.PyObject, send: *python.PyObject, logger: *const utils.Logger) void {
+// NOTE: ! return means it can "throw" an error
+fn callAppLifespan(app: *python.PyObject, scope: *python.PyObject, receive: *python.PyObject, send: *python.PyObject, logger: *const utils.Logger) !void {
     logger.debug("Calling ASGI application for lifespan", .{});
 
     python.callAsgiApplication(app, scope, receive, send) catch |err| {
         logger.err("Error calling ASGI application for lifespan: {!}", .{err});
+        return python.PythonError.RuntimeError;
     };
 }
