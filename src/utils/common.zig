@@ -113,10 +113,45 @@ pub const Logger = struct {
 
 /// Get the current timestamp as a string
 fn getTimestamp() []const u8 {
-    // Use a static buffer to store the formatted timestamp
-    // This makes the function simpler and avoids allocation issues
-    const timestamp = "2023-05-08 12:34:56";
-    return timestamp;
+    // Use a static buffer for the timestamp to ensure it stays in memory
+    const buffer_size = 20; // "yyyy-MM-dd HH:mm:ss"
+
+    // In Zig, static variables are declared at module scope
+    // So we'll define a comptime initialized array and return a reference to it
+    // This approach ensures the buffer doesn't get deallocated after function return
+    const timestamp = struct {
+        var buffer: [buffer_size]u8 = undefined;
+    };
+
+    // Get current timestamp in seconds
+    const seconds = std.time.timestamp();
+
+    // Create EpochSeconds and use it to get day and time info
+    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @as(u64, @intCast(seconds)) };
+    const epoch_day = epoch_seconds.getEpochDay();
+    const day_seconds = epoch_seconds.getDaySeconds();
+
+    // Get date components
+    const year_day = epoch_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+
+    const year = year_day.year;
+    const month = month_day.month.numeric(); // Get numerical month value
+    const day = month_day.day_index + 1; // Days are 0-indexed
+
+    // Get time components
+    const hours = day_seconds.getHoursIntoDay();
+    const minutes = day_seconds.getMinutesIntoHour();
+    const seconds_val = day_seconds.getSecondsIntoMinute();
+
+    // Format to buffer: yyyy-MM-dd HH:mm:ss
+    const result = std.fmt.bufPrint(&timestamp.buffer, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
+        year, month, day, hours, minutes, seconds_val,
+    }) catch {
+        return "ERROR-TIME";
+    };
+
+    return result;
 }
 
 /// Worker process information
