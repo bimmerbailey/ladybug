@@ -52,6 +52,7 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
             print("About to receive from lifespan message")
             try:
                 message = receive()
+                raise Exception("Test error")
             except Exception as e:
                 print(f"DEBUG: Error receiving from lifespan: {e}")
                 raise

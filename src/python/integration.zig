@@ -419,9 +419,14 @@ fn getNoneForCallback() ?*PyObject {
 }
 
 pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
-    _ = callable;
-    _ = args;
     _ = nargs;
+
+    const receive_obj = @as(*ReceiveObject, @ptrCast(callable.?));
+    const queue = receive_obj.queue.?;
+
+    std.debug.print("DEBUG: In asgi_receive_vectorcall, queue: {*}\n", .{queue});
+    std.debug.print("DEBUG: In asgi_receive_vectorcall, callable: {*}\n", .{callable});
+    std.debug.print("DEBUG: In asgi_receive_vectorcall, args: {*}\n", .{args});
 
     const body = "{ \"message\": \"Hello from Zig!\" }";
 
@@ -469,24 +474,38 @@ pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.
     return python.getPyNone();
 }
 
+// Define a struct for the receive callable that includes the queue pointer
+pub const ReceiveObject = extern struct {
+    // PyObject header must come first
+    ob_base: python.PyObject,
+    // Custom data follows
+    queue: ?*protocol.MessageQueue,
+};
+
+// TODO: tp_name
 var ReceiveType = PyTypeObject{
     .ob_base = undefined,
     .tp_name = "ReceiveCallable",
-    .tp_basicsize = @sizeOf(python.PyObject),
+    .tp_basicsize = @sizeOf(ReceiveObject),
     .tp_itemsize = 0,
     .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
     .tp_call = @ptrCast(&asgi_receive_vectorcall),
+    .tp_doc = python.og.PyDoc_STR("Receive a message from the queue"),
 };
 
-pub fn create_receive_vectorcall_callable() !*python.PyObject {
+pub fn create_receive_vectorcall_callable(queue: *protocol.MessageQueue) !*python.PyObject {
     if (python.og.PyType_Ready(&ReceiveType) < 0) return error.PythonTypeInitFailed;
 
     // Use PyType_GenericAlloc to create an instance of the type
-    // This is the correct way to instantiate a Python type object
     const instance = python.og.PyType_GenericAlloc(@ptrCast(&ReceiveType), 0);
     if (instance == null) return error.PythonAllocationFailed;
 
-    return instance;
+    // Cast to our custom object type to access the queue field
+    const receive_obj = @as(*ReceiveObject, @ptrCast(instance));
+    receive_obj.queue = queue;
+
+    // Return as a PyObject*
+    return @as(*python.PyObject, @ptrCast(receive_obj));
 }
 
 var SendType = PyTypeObject{
@@ -498,7 +517,8 @@ var SendType = PyTypeObject{
     .tp_call = @ptrCast(&asgi_send_vectorcall),
 };
 
-pub fn create_send_vectorcall_callable() !*python.PyObject {
+pub fn create_send_vectorcall_callable(queue: *protocol.MessageQueue) !*python.PyObject {
+    _ = queue; // Unused
     if (python.og.PyType_Ready(&SendType) < 0) return error.PythonTypeInitFailed;
 
     // Use PyType_GenericAlloc to create an instance of the type
@@ -658,6 +678,15 @@ fn pyReceiveCallback(self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject {
         return null;
     }
 
+    const queue_ptr = python.og.PyCapsule_GetPointer(self, "MessageQueue");
+    if (queue_ptr == null) {
+        return null;
+    }
+
+    // Cast with alignment correction
+    const queue = @as(*protocol.MessageQueue, @alignCast(@ptrCast(queue_ptr)));
+    std.debug.print("DEBUG: Queue: {*}\n", .{queue});
+
     // Create async task for awaiting
     const asyncio = python.og.PyImport_ImportModule("asyncio");
     if (asyncio == null) {
@@ -678,6 +707,21 @@ fn pyReceiveCallback(self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject {
     if (future == null) {
         return null;
     }
+
+    // Spawn a separate thread to wait for the message
+    const thread_state = python.PyEval_SaveThread();
+
+    // Receive message (this will block until a message is available)
+    const message = queue.receive() catch {
+        python.PyEval_RestoreThread(thread_state);
+        _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to receive message from queue");
+        decref(future.?);
+        return null;
+    };
+    std.debug.print("DEBUG: Received message: {*}\n", .{message});
+
+    // Restore the thread state breaks when using python.og.PyEval_RestoreThread
+    python.PyEval_RestoreThread(thread_state);
 
     // Create Python dictionary directly instead of using JSON conversion
     const py_dict = python.og.PyDict_New();
@@ -740,13 +784,27 @@ fn pyReceiveCallback(self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject {
 /// Function to be called from Python's send() callable
 fn pySendCallback(self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject {
     // Note: we're not using self parameter for now to avoid bus errors
-    _ = self; // Mark as used to avoid linter warning
 
     // Ensure we have exactly one argument
     if (python.PyTuple_Size(args) != 1) {
         _ = python.og.PyErr_SetString(python.PyExc_TypeError, "Expected exactly one argument");
         return null;
     }
+
+    // Expecting self to be a pointer to a Message Queue
+    if (python.og.PyCapsule_CheckExact(self) == 0) {
+        _ = python.PyErr_SetString(python.PyExc_TypeError, "Expected a capsule as self");
+        return null;
+    }
+
+    const queue_ptr = python.og.PyCapsule_GetPointer(self, "MessageQueue");
+    if (queue_ptr == null) {
+        return null;
+    }
+
+    // Cast with alignment correction
+    const queue = @as(*protocol.MessageQueue, @alignCast(@ptrCast(queue_ptr)));
+    std.debug.print("DEBUG: Queue: {*}\n", .{queue});
 
     // We won't try to access the queue directly for now, as that was causing the bus error
     // Instead we'll just acknowledge the message for the lifespan protocol
