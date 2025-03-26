@@ -221,9 +221,23 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     defer scope.deinit();
 
     // Create Python objects for the ASGI interface
+
     const jsonScope = try scope.toJsonValue();
     const py_scope = try python.jsonToPyObject(allocator, jsonScope);
     defer python.decref(py_scope);
+    defer asgi.jsonValueDeinit(jsonScope, allocator);
+    // Push initial http.request message
+    try to_app.push(jsonScope);
+
+    const receive = try python.create_receive_vectorcall_callable(&to_app);
+    defer python.decref(receive);
+
+    const send = try python.create_send_vectorcall_callable(&from_app);
+    defer python.decref(send);
+
+    std.debug.print("\nDEBUG: Calling ASGI application from handleConnection\n", .{});
+    // Call ASGI application
+    try python.callAsgiApplication(app, py_scope, receive, send);
 
     // Send response
     std.debug.print("DEBUG: Creating response\n", .{});

@@ -32,10 +32,10 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
     if scope["type"] == "http":
         print("About to receive")
         # Get request
-        await receive()
+        receive()
         print("\nDEBUG: Received request\n")
         # Send response
-        await send({
+        send({
             "type": "http.response.start",
             "status": 200,
             "headers": [
@@ -44,7 +44,7 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
         })
         print("\nDEBUG: Sent response start\n") 
         
-        await send({
+        send({
             "type": "http.response.body",
             "body": b"Hello from minimal ASGI app!",
         })
