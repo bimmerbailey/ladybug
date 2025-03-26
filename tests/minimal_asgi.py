@@ -6,7 +6,7 @@ import asyncio
 import sys
 from typing import Callable, Any, Dict, List, Tuple, Optional, Awaitable
 import json
-
+import random
 async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, Any]]], send: Callable[[Dict[str, Any]], Awaitable[None]]) -> None:
     """
     Minimal ASGI application.
@@ -46,7 +46,12 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
         
         send({
             "type": "http.response.body",
-            "body": b"Hello from minimal ASGI app!",
+            "body": json.dumps({
+                random.choice(
+                    ["Hello", "World", "Zig", "Python"]
+                    ): random.choice(
+                        ["Something", "Nothing", "Everything", "Nothing"]
+                        )}),
         })
     elif scope["type"] == "lifespan":
         while True:
