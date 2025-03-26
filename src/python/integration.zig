@@ -418,15 +418,54 @@ fn getNoneForCallback() ?*PyObject {
     return none;
 }
 
+// Define a struct for the receive callable that includes the queue pointer
+pub const AsgiCallableObject = extern struct {
+    // PyObject header must come first
+    ob_base: python.PyObject,
+    // Custom data follows
+    queue: ?*protocol.MessageQueue,
+};
+
+// TODO: Come back to this once more familiar
+fn create_asgi_callable_object(name: [*c]const u8, doc: [*c]const u8, vectorcall: *fn ([*c]?*python.PyObject, [*c]?*python.PyObject, usize) callconv(.C) *python.PyObject) PyTypeObject {
+    return PyTypeObject{
+        .ob_base = undefined,
+        .tp_name = name,
+        .tp_basicsize = @sizeOf(AsgiCallableObject),
+        .tp_itemsize = 0,
+        .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
+        .tp_call = @ptrCast(vectorcall),
+        .tp_doc = doc,
+    };
+}
+
 pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
     _ = nargs;
+    _ = args;
 
-    const receive_obj = @as(*ReceiveObject, @ptrCast(callable.?));
+    const receive_obj = @as(*AsgiCallableObject, @ptrCast(callable.?));
     const queue = receive_obj.queue.?;
 
-    std.debug.print("DEBUG: In asgi_receive_vectorcall, queue: {*}\n", .{queue});
-    std.debug.print("DEBUG: In asgi_receive_vectorcall, callable: {*}\n", .{callable});
-    std.debug.print("DEBUG: In asgi_receive_vectorcall, args: {*}\n", .{args});
+    // Spawn a separate thread to wait for the message
+    const thread_state = python.PyEval_SaveThread();
+
+    // Receive message (this will block until a message is available)
+    const message = queue.receive() catch {
+        python.PyEval_RestoreThread(thread_state);
+        _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to receive message from queue");
+        return null;
+    };
+    std.debug.print("DEBUG: Received message from queue: {}\n", .{message});
+
+    // Restore the thread state breaks when using python.og.PyEval_RestoreThread
+    python.PyEval_RestoreThread(thread_state);
+
+    // Convert to Python dict
+    const gpa = std.heap.c_allocator;
+    const py_message = jsonToPyObject(gpa, message) catch {
+        _ = python.og.PyErr_SetString(python.PyExc_RuntimeError, "Failed to convert message to Python object");
+        return python.og.PyDict_New();
+    };
 
     const body = "{ \"message\": \"Hello from Zig!\" }";
 
@@ -435,58 +474,14 @@ pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*pyth
     _ = python.og.PyDict_SetItemString(dict, "type", python.og.PyUnicode_FromString("http.request"));
     _ = python.og.PyDict_SetItemString(dict, "body", python.og.PyBytes_FromString(body));
 
-    return dict;
+    return py_message;
 }
 
-pub fn handle_send_message(message: [*c]python.PyObject) void {
-    std.debug.print("DEBUG: Received message: {*}\n", .{message});
-    // const event_type_str = python.og.PyUnicode_AsUTF8(message);
-    // const event_type = python.og.PyDict_GetItemString(event_type_str, "type");
-    // std.debug.print("DEBUG: Received event type: {s}\n", .{event_type});
-    // if (std.mem.eql(u8, event_type_str, "http.response.start")) {
-    //     std.debug.print("Received response headers\n", .{});
-    // }
-}
-
-pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
-    _ = callable;
-    _ = nargs;
-
-    std.debug.print("DEBUG: In asgi_send_vectorcall, \n", .{});
-
-    // NOTE: Checks if args is null, then sets an error and returns None
-    // Otherwise, gets the first item from the tuple and checks if it's null, then sets an error and returns None
-    if (args) |arg| {
-        // Cast arg to a non-optional pointer before passing to PyTuple_GetItem
-        const arg_non_opt = @as([*c]python.PyObject, @ptrCast(arg));
-        const message = python.og.PyTuple_GetItem(arg_non_opt, 0);
-        if (message == null) {
-            std.debug.print("DEBUG: Message is null\n", .{});
-            return python.getPyNone();
-        }
-
-        handle_send_message(message);
-    } else {
-        _ = python.og.PyErr_SetString(python.PyExc_TypeError, "Expected exactly one argument");
-        return python.getPyNone();
-    }
-
-    return python.getPyNone();
-}
-
-// Define a struct for the receive callable that includes the queue pointer
-pub const ReceiveObject = extern struct {
-    // PyObject header must come first
-    ob_base: python.PyObject,
-    // Custom data follows
-    queue: ?*protocol.MessageQueue,
-};
-
-// TODO: tp_name
+// TODO: ,
 var ReceiveType = PyTypeObject{
     .ob_base = undefined,
     .tp_name = "ReceiveCallable",
-    .tp_basicsize = @sizeOf(ReceiveObject),
+    .tp_basicsize = @sizeOf(AsgiCallableObject),
     .tp_itemsize = 0,
     .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
     .tp_call = @ptrCast(&asgi_receive_vectorcall),
@@ -501,32 +496,85 @@ pub fn create_receive_vectorcall_callable(queue: *protocol.MessageQueue) !*pytho
     if (instance == null) return error.PythonAllocationFailed;
 
     // Cast to our custom object type to access the queue field
-    const receive_obj = @as(*ReceiveObject, @ptrCast(instance));
+    const receive_obj = @as(*AsgiCallableObject, @ptrCast(instance));
     receive_obj.queue = queue;
 
     // Return as a PyObject*
     return @as(*python.PyObject, @ptrCast(receive_obj));
 }
 
+pub fn handle_send_message(message: [*c]python.PyObject) void {
+    std.debug.print("DEBUG: Received message: {*}\n", .{message});
+
+    // Convert to JSON
+
+    // const event_type_str = python.og.PyUnicode_AsUTF8(message);
+    // const event_type = python.og.PyDict_GetItemString(event_type_str, "type");
+    // std.debug.print("DEBUG: Received event type: {s}\n", .{event_type});
+    // if (std.mem.eql(u8, event_type_str, "http.response.start")) {
+    //     std.debug.print("Received response headers\n", .{});
+    // }
+}
+
+pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
+    _ = nargs;
+
+    const send_obj = @as(*AsgiCallableObject, @ptrCast(callable.?));
+    const queue = send_obj.queue.?;
+
+    std.debug.print("DEBUG: In asgi_send_vectorcall, queue: {*}\n", .{queue});
+
+    // NOTE: Checks if args is null, then sets an error and returns None
+    // Otherwise, gets the first item from the tuple and checks if it's null, then sets an error and returns None
+    if (args) |arg| {
+        // Cast arg to a non-optional pointer before passing to PyTuple_GetItem
+        const arg_non_opt = @as([*c]python.PyObject, @ptrCast(arg));
+        const message = python.og.PyTuple_GetItem(arg_non_opt, 0);
+        if (message == null) {
+            std.debug.print("DEBUG: Message is null\n", .{});
+            return python.getPyNone();
+        }
+
+        const gpa = std.heap.c_allocator;
+        const json_message = pyObjectToJson(gpa, message.?) catch {
+            _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to convert message to JSON");
+            return python.getPyNone();
+        };
+        // Push the message to the queue
+        queue.push(json_message) catch {
+            _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to push message to queue");
+            return python.getPyNone();
+        };
+    } else {
+        _ = python.og.PyErr_SetString(python.PyExc_TypeError, "Expected exactly one argument");
+        return python.getPyNone();
+    }
+
+    return python.getPyNone();
+}
 var SendType = PyTypeObject{
     .ob_base = undefined,
     .tp_name = "SendCallable",
-    .tp_basicsize = @sizeOf(python.PyObject),
+    .tp_basicsize = @sizeOf(AsgiCallableObject),
     .tp_itemsize = 0,
     .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
     .tp_call = @ptrCast(&asgi_send_vectorcall),
+    .tp_doc = python.og.PyDoc_STR("Send a message to the queue"),
 };
 
 pub fn create_send_vectorcall_callable(queue: *protocol.MessageQueue) !*python.PyObject {
-    _ = queue; // Unused
     if (python.og.PyType_Ready(&SendType) < 0) return error.PythonTypeInitFailed;
 
     // Use PyType_GenericAlloc to create an instance of the type
-    // This is the correct way to instantiate a Python type object
-    const instance = python.og.PyType_GenericAlloc(@ptrCast(&ReceiveType), 0);
+    const instance = python.og.PyType_GenericAlloc(@ptrCast(&SendType), 0);
     if (instance == null) return error.PythonAllocationFailed;
 
-    return instance;
+    // Cast to our custom object type to access the queue field
+    const send_obj = @as(*AsgiCallableObject, @ptrCast(instance));
+    send_obj.queue = queue;
+
+    // Return as a PyObject*
+    return @as(*python.PyObject, @ptrCast(send_obj));
 }
 
 /// Call an ASGI application with scope, receive, and send

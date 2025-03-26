@@ -5,6 +5,7 @@ import inspect
 import asyncio
 import sys
 from typing import Callable, Any, Dict, List, Tuple, Optional, Awaitable
+import json
 
 async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, Any]]], send: Callable[[Dict[str, Any]], Awaitable[None]]) -> None:
     """
@@ -52,18 +53,19 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
             print("About to receive from lifespan message")
             try:
                 message = receive()
-                raise Exception("Test error")
+                message_str = json.dumps(message)
+                msg = f"Test error: {message_str}"
             except Exception as e:
                 print(f"DEBUG: Error receiving from lifespan: {e}")
                 raise
             
             print(f"DEBUG: Received lifespan message: {message}")
             if message["type"] == "lifespan.startup":
-                await send({"type": "lifespan.startup.complete"})
+                send({"type": "lifespan.startup.complete"})
                 print("Sent startup complete")
                 break
             elif message["type"] == "lifespan.shutdown":
-                await send({"type": "lifespan.shutdown.complete"})
+                send({"type": "lifespan.shutdown.complete"})
                 print("Sent shutdown complete")
                 break 
             break
