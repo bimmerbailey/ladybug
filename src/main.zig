@@ -285,8 +285,8 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
     defer python.decref(receive);
 
     std.debug.print("DEBUG: Creating send callable\n", .{});
-    const send = try python.createSendCallable(&from_app);
-    // const send = try python.create_send_vectorcall_callable();
+    // const send = try python.createSendCallable(&from_app);
+    const send = try python.create_send_vectorcall_callable();
     defer python.decref(send);
 
     std.debug.print("DEBUG: Creating startup message\n", .{});

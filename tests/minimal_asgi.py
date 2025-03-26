@@ -49,7 +49,7 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
         })
     elif scope["type"] == "lifespan":
         while True:
-            print("About to receive from lifespan message\n\n")
+            print("About to receive from lifespan message")
             try:
                 message = receive()
             except Exception as e:
@@ -59,7 +59,11 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
             print(f"DEBUG: Received lifespan message: {message}")
             if message["type"] == "lifespan.startup":
                 await send({"type": "lifespan.startup.complete"})
+                print("Sent startup complete")
+                break
             elif message["type"] == "lifespan.shutdown":
                 await send({"type": "lifespan.shutdown.complete"})
+                print("Sent shutdown complete")
                 break 
+            break
     print("DEBUG: Python app finished\n\n")
