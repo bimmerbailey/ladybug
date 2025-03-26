@@ -5,7 +5,9 @@ const json = std.json;
 /// Helper function to clean up JSON values in Zig 0.14
 pub fn jsonValueDeinit(value: json.Value, allocator: Allocator) void {
     switch (value) {
-        .string => |s| allocator.free(s),
+        // Don't try to free string values as they might be literals or
+        // managed by other structures (just like the object keys)
+        .string => {},
         .array => |*arr| {
             for (arr.items) |*item| {
                 jsonValueDeinit(item.*, allocator);
@@ -16,7 +18,9 @@ pub fn jsonValueDeinit(value: json.Value, allocator: Allocator) void {
             var mutable_obj = obj;
             var it = mutable_obj.iterator();
             while (it.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
+                // The key might be owned by the object's internal storage,
+                // not individually allocated, so we shouldn't free it directly
+                // allocator.free(entry.key_ptr.*);
                 jsonValueDeinit(entry.value_ptr.*, allocator);
             }
             mutable_obj.deinit();
