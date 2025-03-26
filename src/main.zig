@@ -240,35 +240,87 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     try python.callAsgiApplication(app, py_scope, receive, send);
 
     // Send response
-    std.debug.print("DEBUG: Creating response\n", .{});
-    var response = http.Response.init(allocator);
-    defer response.deinit();
-    const response_body =
-        \\<!DOCTYPE html>
-        \\<html>
-        \\<head>
-        \\    <title>Zig HTTP Server</title>
-        \\</head>
-        \\<body>
-        \\    <h1>Hello from Zig!</h1>
-        \\    <p>Your HTTP server is working on port 8080.</p>
-        \\</body>
-        \\</html>
-    ;
+    // Process response events from the application
+    var response_started = false;
+    var status: u16 = 200;
+    var response_headers = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var headers_iterator = response_headers.iterator();
+        while (headers_iterator.next()) |header| {
+            allocator.free(header.key_ptr.*);
+            allocator.free(header.value_ptr.*);
+        }
+        response_headers.deinit();
+    }
 
-    // TODO: This is a hack to get the content length
-    var buf: [256]u8 = undefined;
-    const length_str = try std.fmt.bufPrint(&buf, "{}", .{response_body.len});
-    const status: u16 = 200;
-    try response.setBody(response_body);
-    try response.setHeader("Content-Type", "text/html");
-    try response.setHeader("Content-Length", length_str);
-    try response.setHeader("Connection", "close");
-    response.status = status;
+    while (true) {
+        const event = try from_app.receive();
+        defer asgi.jsonValueDeinit(event, allocator);
 
-    // Send the response
-    std.debug.print("DEBUG: Sending response\n", .{});
-    try response.send(&connection.stream);
+        const type_value = event.object.get("type") orelse continue;
+        if (type_value != .string) continue;
+
+        if (std.mem.eql(u8, type_value.string, "http.response.start")) {
+            response_started = true;
+
+            // Get status code
+            const status_value = event.object.get("status") orelse continue;
+            if (status_value == .integer) {
+                status = @intCast(status_value.integer);
+            }
+
+            // Get headers
+            const headers_value = event.object.get("headers") orelse continue;
+            if (headers_value != .array) continue;
+
+            for (headers_value.array.items) |header| {
+                if (header != .array or header.array.items.len != 2) continue;
+
+                const name = header.array.items[0];
+                const value = header.array.items[1];
+
+                if (name != .string or value != .string) continue;
+
+                const name_str = try allocator.dupe(u8, name.string);
+                const value_str = try allocator.dupe(u8, value.string);
+
+                try response_headers.put(name_str, value_str);
+            }
+        } else if (std.mem.eql(u8, type_value.string, "http.response.body")) {
+            if (!response_started) {
+                logger.err("Received http.response.body before http.response.start", .{});
+                continue;
+            }
+
+            // Get body content
+            const body_value = event.object.get("body") orelse continue;
+            if (body_value != .string) continue;
+
+            // Send response
+            var response = http.Response.init(allocator);
+            defer response.deinit();
+
+            response.status = status;
+
+            // Copy headers
+            var headers_it = response_headers.iterator();
+            while (headers_it.next()) |header| {
+                try response.setHeader(header.key_ptr.*, header.value_ptr.*);
+            }
+
+            // Set body
+            try response.setBody(body_value.string);
+
+            // Send to client
+            try response.send(&connection.stream);
+
+            // Check if more body chunks are coming
+            const more_body = event.object.get("more_body") orelse std.json.Value{ .bool = false };
+            if (more_body != .bool or !more_body.bool) {
+                break;
+            }
+        }
+    }
 }
 
 /// Handle the lifespan protocol for startup/shutdown events
