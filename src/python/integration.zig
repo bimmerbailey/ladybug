@@ -474,8 +474,59 @@ pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*pyth
     _ = python.og.PyDict_SetItemString(dict, "type", python.og.PyUnicode_FromString("http.request"));
     _ = python.og.PyDict_SetItemString(dict, "body", python.og.PyBytes_FromString(body));
 
-    return py_message;
+    // Create async task for awaiting
+    const asyncio = python.og.PyImport_ImportModule("asyncio");
+    if (asyncio == null) {
+        _ = python.PyErr_SetString(python.PyExc_ImportError, "Failed to import asyncio");
+        return python.og.PyDict_New();
+    }
+    defer decref(asyncio);
+
+    // Create a Future to handle asynchronous receive
+    const future_type = python.og.PyObject_GetAttrString(asyncio, "Future");
+    if (future_type == null) {
+        _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get Future");
+        return python.og.PyDict_New();
+    }
+    defer decref(future_type);
+
+    const future = python.og.PyObject_CallObject(future_type, null);
+    if (future == null) {
+        return python.og.PyDict_New();
+    }
+
+    // Set the result on the future
+    const set_result = python.og.PyObject_GetAttrString(future, "set_result");
+    if (set_result == null) {
+        decref(dict);
+        decref(future.?);
+        return python.og.PyDict_New();
+    }
+    defer decref(set_result);
+
+    // Set the result with our message
+    const result = python.zig_call_function_with_arg(set_result, py_message);
+    if (result == null) {
+        decref(future.?);
+        return python.og.PyDict_New();
+    }
+    decref(result.?);
+    decref(dict);
+
+    std.debug.print("DEBUG: asgi_receive_vectorcall returning future: {*}\n", .{future});
+    return future;
 }
+
+// The await function: This gets called when `await receive()` is used
+fn receive_await(self: [*c]python.PyObject) callconv(.C) [*c]python.PyObject {
+    return self; // Return self to indicate it's an awaitable
+}
+
+var AsyncMethods = python.og.PyAsyncMethods{
+    .am_await = receive_await,
+    .am_aiter = null,
+    .am_anext = null,
+};
 
 // TODO: ,
 var ReceiveType = PyTypeObject{
@@ -485,6 +536,7 @@ var ReceiveType = PyTypeObject{
     .tp_itemsize = 0,
     .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
     .tp_call = @ptrCast(&asgi_receive_vectorcall),
+    .tp_as_async = @ptrCast(&AsyncMethods),
     .tp_doc = python.og.PyDoc_STR("Receive a message from the queue"),
 };
 
@@ -532,25 +584,64 @@ pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.
         const message = python.og.PyTuple_GetItem(arg_non_opt, 0);
         if (message == null) {
             std.debug.print("DEBUG: Message is null\n", .{});
-            return python.getPyNone();
+        } else {
+            const gpa = std.heap.c_allocator;
+            const json_message = pyObjectToJson(gpa, message) catch {
+                _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to convert message to JSON");
+                return python.getPyNone();
+            };
+            // Push the message to the queue
+            queue.push(json_message) catch {
+                _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to push message to queue");
+            };
         }
-
-        const gpa = std.heap.c_allocator;
-        const json_message = pyObjectToJson(gpa, message.?) catch {
-            _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to convert message to JSON");
-            return python.getPyNone();
-        };
-        // Push the message to the queue
-        queue.push(json_message) catch {
-            _ = python.PyErr_SetString(python.PyExc_RuntimeError, "Failed to push message to queue");
-            return python.getPyNone();
-        };
     } else {
         _ = python.og.PyErr_SetString(python.PyExc_TypeError, "Expected exactly one argument");
-        return python.getPyNone();
     }
 
-    return python.getPyNone();
+    const value = python.getPyNone();
+
+    // Create async task for awaiting
+    const asyncio = python.og.PyImport_ImportModule("asyncio");
+    if (asyncio == null) {
+        _ = python.PyErr_SetString(python.PyExc_ImportError, "Failed to import asyncio");
+        return python.og.PyDict_New();
+    }
+    defer decref(asyncio);
+
+    // TODO: Future is deprecated in Python 3.10
+    // Create a Future to handle asynchronous receive
+    const future_type = python.og.PyObject_GetAttrString(asyncio, "Future");
+    if (future_type == null) {
+        _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get Future");
+        return python.og.Py_None();
+    }
+    defer decref(future_type);
+
+    const future = python.og.PyObject_CallObject(future_type, null);
+    if (future == null) {
+        return python.og.Py_None();
+    }
+
+    // Set the result on the future
+    const set_result = python.og.PyObject_GetAttrString(future, "set_result");
+    if (set_result == null) {
+        decref(future.?);
+        return python.og.Py_None();
+    }
+    defer decref(set_result);
+
+    // Set the result with our message
+    const result = python.zig_call_function_with_arg(set_result, value);
+    if (result == null) {
+        decref(future.?);
+        return python.og.Py_None();
+    }
+    decref(result.?);
+    decref(value);
+
+    std.debug.print("DEBUG: asgi_send_vectorcall returning future: {*}\n", .{future});
+    return future;
 }
 var SendType = PyTypeObject{
     .ob_base = undefined,
@@ -559,6 +650,7 @@ var SendType = PyTypeObject{
     .tp_itemsize = 0,
     .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
     .tp_call = @ptrCast(&asgi_send_vectorcall),
+    .tp_as_async = @ptrCast(&AsyncMethods),
     .tp_doc = python.og.PyDoc_STR("Send a message to the queue"),
 };
 
@@ -766,7 +858,7 @@ fn pyReceiveCallback(self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject {
         decref(future.?);
         return null;
     };
-    std.debug.print("DEBUG: Received message: {*}\n", .{message});
+    std.debug.print("DEBUG: Received message: {}\n", .{message});
 
     // Restore the thread state breaks when using python.og.PyEval_RestoreThread
     python.PyEval_RestoreThread(thread_state);
@@ -935,6 +1027,7 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
         handlePythonError();
         return PythonError.RuntimeError;
     }
+    defer decref(capsule.?);
 
     // Import types module to get coroutine decorator
     const types = python.og.PyImport_ImportModule("types");
@@ -956,7 +1049,7 @@ pub fn createReceiveCallable(queue: *protocol.MessageQueue) !*python.PyObject {
 
     std.debug.print("DEBUG: Creating function object!\n", .{});
     // Create a function that returns a future
-    const py_func = python.og.PyCFunction_New(&method_def, null);
+    const py_func = python.og.PyCFunction_New(&method_def, capsule);
     if (py_func == null) {
         // decref(capsule.?);
         handlePythonError();
