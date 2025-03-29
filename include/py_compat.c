@@ -32,6 +32,19 @@ PyObject* zig_call_function_with_arg(PyObject* func, PyObject* arg) {
     return PyObject_CallFunctionObjArgs(func, arg, NULL);
 }
 
+// Safe wrappers for PyThreadState functions to avoid embedding opaque types in Zig
+PyThreadState* zig_py_thread_state_get(void) {
+    return PyThreadState_Get();
+}
+
+PyThreadState* zig_py_thread_state_swap(PyThreadState* new_thread_state) {
+    return PyThreadState_Swap(new_thread_state);
+}
+
+PyInterpreterState* zig_py_thread_state_get_interp(PyThreadState* thread_state) {
+    return PyThreadState_GetInterpreter(thread_state);
+}
+
 // Wrappers for Python C API functions that were missing in the linker errors
 void zig_py_incref(PyObject* obj) {
     Py_INCREF(obj);

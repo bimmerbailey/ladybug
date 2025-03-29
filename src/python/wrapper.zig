@@ -6,6 +6,11 @@ pub const og = @cImport({
 
 // Define the basic PyObject type
 pub const PyObject = og.PyObject;
+pub const PyTypeObject = og.PyTypeObject;
+
+// Define PyThreadState directly as an opaque type to avoid embedding issues
+pub const PyThreadState = opaque {};
+pub const PyInterpreterState = opaque {};
 
 // Define PyMethodDef struct
 pub const PyMethodDef = extern struct {
@@ -89,6 +94,11 @@ pub extern "c" fn zig_py_unicode_check(obj: *PyObject) c_int;
 
 // Object operations
 pub extern "c" fn PyObject_IsTrue(obj: *PyObject) c_int;
+pub extern "c" fn PyObject_New(type: *PyTypeObject, ?*PyObject) ?*PyObject;
+pub extern "c" fn PyObject_NewVar(type: *PyTypeObject, size: og.Py_ssize_t) ?*PyObject;
+pub extern "c" fn PyObject_Init(obj: *PyObject, type: *PyTypeObject) *PyObject;
+pub extern "c" fn PyObject_Malloc(size: usize) ?*anyopaque;
+pub extern "c" fn PyObject_Del(obj: *PyObject) void;
 
 // Bytes operations
 pub extern "c" fn PyBytes_AsStringAndSize(obj: *PyObject, buffer: *[*c]u8, length: *c_long) c_int;
@@ -112,6 +122,9 @@ pub extern "c" var PyExc_AttributeError: *PyObject;
 pub extern "c" var PyExc_ValueError: *PyObject;
 
 // Thread state functions
+pub extern "c" fn zig_py_thread_state_get() ?*PyThreadState;
+pub extern "c" fn zig_py_thread_state_swap(?*PyThreadState) ?*PyThreadState;
+pub extern "c" fn zig_py_thread_state_get_interp(?*PyThreadState) ?*PyInterpreterState;
 pub extern "c" fn PyEval_SaveThread() ?*anyopaque;
 pub extern "c" fn PyEval_RestoreThread(?*anyopaque) void;
 
@@ -182,4 +195,26 @@ pub fn PyTuple_Check(obj: *PyObject) c_int {
 
 pub fn PyUnicode_Check(obj: *PyObject) c_int {
     return zig_py_unicode_check(obj);
+}
+
+// Define wrappers for these functions
+pub fn PyThreadState_Get() ?*PyThreadState {
+    return zig_py_thread_state_get();
+}
+
+pub fn PyThreadState_Swap(new_thread_state: ?*PyThreadState) ?*PyThreadState {
+    return zig_py_thread_state_swap(new_thread_state);
+}
+
+pub fn PyThreadState_GetInterpreter(thread_state: ?*PyThreadState) ?*PyInterpreterState {
+    return zig_py_thread_state_get_interp(thread_state);
+}
+
+// Thread state functions from the original og import
+pub fn PyGILState_Ensure() og.PyGILState_STATE {
+    return og.PyGILState_Ensure();
+}
+
+pub fn PyGILState_Release(state: og.PyGILState_STATE) void {
+    return og.PyGILState_Release(state);
 }

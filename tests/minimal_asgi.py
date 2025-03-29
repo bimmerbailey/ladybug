@@ -30,6 +30,7 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
     # Inspect test func for info
     print(f"DEBUG: test_func type: {type(test_func)}")
     print(f"DEBUG: test_func dir: {dir(test_func)}")
+    print(f"DEBUG: test_func is __call__: {getattr(test_func, '__call__', None)}")
     print(f"DEBUG: test_func is coroutine: {asyncio.iscoroutinefunction(test_func)}")
     print(f"DEBUG: test_func callable: {callable(test_func)}\n")
     
