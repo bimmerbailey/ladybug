@@ -433,7 +433,7 @@ fn create_asgi_callable_object(name: [*c]const u8, doc: [*c]const u8, vectorcall
         .tp_name = name,
         .tp_basicsize = @sizeOf(AsgiCallableObject),
         .tp_itemsize = 0,
-        .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
+        .tp_flags = python.og.Py_TPFLAGS_DEFAULT | python.og.CO_COROUTINE,
         .tp_call = @ptrCast(vectorcall),
         .tp_doc = doc,
     };
@@ -467,13 +467,6 @@ pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*pyth
         return python.og.PyDict_New();
     };
 
-    const body = "{ \"message\": \"Hello from Zig!\" }";
-
-    const dict = python.og.PyDict_New();
-    if (dict == null) return python.getPyNone();
-    _ = python.og.PyDict_SetItemString(dict, "type", python.og.PyUnicode_FromString("http.request"));
-    _ = python.og.PyDict_SetItemString(dict, "body", python.og.PyBytes_FromString(body));
-
     // Create async task for awaiting
     const asyncio = python.og.PyImport_ImportModule("asyncio");
     if (asyncio == null) {
@@ -498,7 +491,6 @@ pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*pyth
     // Set the result on the future
     const set_result = python.og.PyObject_GetAttrString(future, "set_result");
     if (set_result == null) {
-        decref(dict);
         decref(future.?);
         return python.og.PyDict_New();
     }
@@ -511,7 +503,6 @@ pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*pyth
         return python.og.PyDict_New();
     }
     decref(result.?);
-    decref(dict);
 
     std.debug.print("DEBUG: asgi_receive_vectorcall returning future: {*}\n", .{future});
     return future;
@@ -524,7 +515,7 @@ fn receive_await(self: [*c]python.PyObject) callconv(.C) [*c]python.PyObject {
 
 var AsyncMethods = python.og.PyAsyncMethods{
     .am_await = receive_await,
-    .am_aiter = null,
+    .am_aiter = python.og.PyObject_SelfIter,
     .am_anext = null,
 };
 
@@ -534,7 +525,7 @@ var ReceiveType = PyTypeObject{
     .tp_name = "ReceiveCallable",
     .tp_basicsize = @sizeOf(AsgiCallableObject),
     .tp_itemsize = 0,
-    .tp_flags = python.og.Py_TPFLAGS_DEFAULT,
+    .tp_flags = python.og.CO_COROUTINE,
     .tp_call = @ptrCast(&asgi_receive_vectorcall),
     .tp_as_async = @ptrCast(&AsyncMethods),
     .tp_doc = python.og.PyDoc_STR("Receive a message from the queue"),

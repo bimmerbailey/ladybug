@@ -7,6 +7,19 @@ pub const og = @cImport({
 // Define the basic PyObject type
 pub const PyObject = og.PyObject;
 pub const PyTypeObject = og.PyTypeObject;
+const PyModuleDef_Base = og.PyModuleDef_Base;
+const PyModuleDef = og.PyModuleDef;
+
+// NOTE: Zig is unable to compile from the header file
+// Define PyModuleDef_HEAD_INIT
+pub const PyModuleDef_HEAD_INIT = PyModuleDef_Base{
+    .ob_base = PyObject{
+        .ob_type = null,
+    },
+    .m_init = null,
+    .m_index = 0,
+    .m_copy = null,
+};
 
 // Define PyThreadState directly as an opaque type to avoid embedding issues
 pub const PyThreadState = opaque {};
