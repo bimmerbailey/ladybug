@@ -150,6 +150,39 @@ fn handlePythonError() void {
     }
 }
 
+pub fn create_event_loop(py_module: []const u8) !*PyObject {
+    const module = try importModule(py_module);
+    defer decref(module);
+
+    const func = try getAttribute(module, "new_event_loop");
+    defer decref(func);
+
+    const loop = python.og.PyObject_CallObject(func, null);
+    if (loop == null) {
+        std.debug.print("DEBUG: was not able to create loop\n", .{});
+        return python.og.Py_None();
+    }
+    std.debug.print("INFO: Created event loop\n", .{});
+    return @as(*PyObject, loop);
+}
+
+pub fn get_event_loop(module_name: []const u8) !*PyObject {
+    // Import moduled
+    const module = try importModule(module_name);
+    defer decref(module);
+
+    const func = try getAttribute(@as(*PyObject, module), "get_running_loop");
+    defer decref(func);
+
+    const loop = python.og.PyObject_CallObject(func, null);
+    if (loop == null) {
+        std.debug.print("DEBUG: was not able to get loop\n", .{});
+        return python.og.Py_None();
+    }
+    std.debug.print("INFO: Got event loop\n", .{});
+    return @as(*PyObject, loop);
+}
+
 /// Load a Python ASGI application
 pub fn loadApplication(module_path: []const u8, app_name: []const u8) !*python.PyObject {
     std.debug.print("DEBUG: Loading application\n", .{});

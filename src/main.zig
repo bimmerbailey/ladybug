@@ -124,6 +124,10 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     const app = try python.loadApplication(module_name, app_name);
     defer python.decref(app);
 
+    // TODO: Get or create event loop, initially get asyncio.get_running_loop
+    const event_loop = try python.create_event_loop("asyncio");
+    defer python.decref(event_loop);
+
     const py_scope = try python.toPyString("Here we go");
     defer python.decref(py_scope);
     logger.info("Starting ladybug ASGI server...", .{});
@@ -145,6 +149,7 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     // Run the lifespan protocol if enabled
     if (!std.mem.eql(u8, options.lifespan, "off")) {
         std.debug.print("DEBUG: Starting lifespan protocol\n", .{});
+        // TODO: Handle event loop?
         try handleLifespan(allocator, app, logger);
     }
 
@@ -160,6 +165,7 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
         const conn_copy = try allocator.create(std.net.Server.Connection);
         conn_copy.* = conn;
 
+        // TODO: Handle event loop?
         try handleConnection(allocator, conn_copy, app, logger);
         // Process the request in a separate thread
         // const thread = try std.Thread.spawn(.{}, handleConnection, .{
@@ -324,8 +330,10 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
 }
 
 /// Handle the lifespan protocol for startup/shutdown events
-fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *const utils.Logger) !void {
+fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *const utils.Logger, event_loop: *python.PyObject) !void {
     logger.debug("Running lifespan protocol", .{});
+
+    _ = event_loop;
 
     // Create message queues
     var to_app = asgi.MessageQueue.init(allocator);
