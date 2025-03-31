@@ -150,6 +150,48 @@ fn handlePythonError() void {
     }
 }
 
+pub fn is_loop_running(loop: *PyObject) bool {
+    const is_running_cmd = try getAttribute(loop, "is_running");
+    defer decref(is_running_cmd);
+
+    const is_running = python.og.PyObject_CallObject(is_running_cmd, null);
+    if (is_running == 0) {
+        std.debug.print("DEBUG: Loop is not running\n", .{});
+        return false;
+    }
+    std.debug.print("Loop is running {}\n", .{is_running.*});
+    return true;
+}
+
+pub fn set_event_loop(loop: *PyObject) !void {
+    const module = try importModule("asyncio");
+    defer decref(module);
+
+    const func = try getAttribute(module, "set_event_loop");
+    defer decref(func);
+
+    const run_args = python.og.PyTuple_New(1);
+    if (run_args == null) {
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+
+    // PyTuple_SetItem steals the reference
+    if (python.og.PyTuple_SetItem(run_args.?, 0, loop) < 0) {
+        python.decref(run_args.?);
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+    // TODO: Tuple for args that will take loop
+    const called = python.og.PyObject_CallObject(func, run_args);
+    if (called == 0) {
+        std.debug.print("DEBUG: was not able to set loop\n", .{});
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+    std.debug.print("INFO: Set event loop\n", .{});
+}
+
 pub fn create_event_loop(py_module: []const u8) !*PyObject {
     const module = try importModule(py_module);
     defer decref(module);
@@ -158,17 +200,24 @@ pub fn create_event_loop(py_module: []const u8) !*PyObject {
     defer decref(func);
 
     const loop = python.og.PyObject_CallObject(func, null);
-    if (loop == null) {
+    if (loop == 0) {
         std.debug.print("DEBUG: was not able to create loop\n", .{});
         return python.og.Py_None();
+    }
+
+    try set_event_loop(loop);
+    std.debug.print("Getting event loop in create\n", .{});
+    const is_existing = try get_event_loop();
+    if (is_existing == python.zig_get_py_none()) {
+        std.debug.print("Not able to get the event loop\n", .{});
     }
     std.debug.print("INFO: Created event loop\n", .{});
     return @as(*PyObject, loop);
 }
 
-pub fn get_event_loop(module_name: []const u8) !*PyObject {
+pub fn get_event_loop() !*PyObject {
     // Import moduled
-    const module = try importModule(module_name);
+    const module = try importModule("asyncio");
     defer decref(module);
 
     const func = try getAttribute(@as(*PyObject, module), "get_running_loop");
@@ -768,6 +817,7 @@ pub fn callAsgiApplication(app: *python.PyObject, scope: *python.PyObject, recei
     }
     std.debug.print("DEBUG: Call succeeded of asgi app, got coroutine: {*}\n", .{coroutine.?});
 
+    // TODO: Loop should be running the app not using asyncio.run
     // Import asyncio to run the coroutine
     const asyncio = python.og.PyImport_ImportModule("asyncio");
     if (asyncio == null) {
