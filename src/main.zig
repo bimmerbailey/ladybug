@@ -116,13 +116,17 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     std.debug.print("DEBUG: Running worker\n", .{});
 
     // Set up Python interpreter
-    try python.initialize();
-    defer python.finalize();
+    try python.base.initialize();
+    defer python.base.finalize();
+
+    // Create and set up the event loop
+    const event_loop = try python.event_loop.createAndSetEventLoop();
+    defer python.base.decref(event_loop);
 
     // Load ASGI application
     logger.info("Loading ASGI application from {s}:{s}", .{ module_name, app_name });
     const app = try python.loadApplication(module_name, app_name);
-    defer python.decref(app);
+    defer python.base.decref(app);
 
     logger.info("Starting ladybug ASGI server...", .{});
 
@@ -144,7 +148,7 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     if (!std.mem.eql(u8, options.lifespan, "off")) {
         std.debug.print("DEBUG: Starting lifespan protocol\n", .{});
         // TODO: Handle event loop?
-        try handleLifespan(allocator, app, logger);
+        try handleLifespan(allocator, app, logger, event_loop);
     }
 
     // TODO: If more than one worker use multiprocessing
@@ -160,7 +164,7 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
         conn_copy.* = conn;
 
         // TODO: Handle event loop?
-        try handleConnection(allocator, conn_copy, app, logger);
+        try handleConnection(allocator, conn_copy, app, logger, event_loop);
         // Process the request in a separate thread
         // const thread = try std.Thread.spawn(.{}, handleConnection, .{
         //     allocator, conn_copy, app, &logger,
@@ -170,11 +174,7 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
 }
 
 /// Handle an HTTP connection
-fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Connection, app: *python.PyObject, logger: *const utils.Logger) !void {
-    // IMPORTANT: Acquire the GIL before creating Python objects
-    // const gil_state = python.PyGILState_Ensure();
-    // defer python.PyGILState_Release(gil_state);
-
+fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Connection, app: *python.PyObject, logger: *const utils.Logger, loop: *python.PyObject) !void {
     // Make sure we clean up the connection and memory
     defer {
         connection.stream.close();
@@ -223,21 +223,21 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     // Create Python objects for the ASGI interface
 
     const jsonScope = try scope.toJsonValue();
-    const py_scope = try python.jsonToPyObject(allocator, jsonScope);
-    defer python.decref(py_scope);
+    const py_scope = try python.base.jsonToPyObject(allocator, jsonScope);
+    defer python.base.decref(py_scope);
     defer asgi.jsonValueDeinit(jsonScope, allocator);
     // Push initial http.request message
     try to_app.push(jsonScope);
 
     const receive = try python.create_receive_vectorcall_callable(&to_app);
-    defer python.decref(receive);
+    defer python.base.decref(receive);
 
     const send = try python.create_send_vectorcall_callable(&from_app);
-    defer python.decref(send);
+    defer python.base.decref(send);
 
     std.debug.print("\nDEBUG: Calling ASGI application from handleConnection\n", .{});
     // Call ASGI application
-    try python.callAsgiApplication(app, py_scope, receive, send);
+    try python.callAsgiApplication(app, py_scope, receive, send, loop);
 
     // Send response
     // Process response events from the application
@@ -324,7 +324,7 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
 }
 
 /// Handle the lifespan protocol for startup/shutdown events
-fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *const utils.Logger) !void {
+fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *const utils.Logger, loop: *python.PyObject) !void {
     logger.debug("Running lifespan protocol", .{});
 
     // Create message queues
@@ -341,33 +341,34 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
 
     std.debug.print("DEBUG: Creating Python scope\n", .{});
     // Create Python scope dict
-    const py_scope = try python.createPyDict(allocator, scope);
-    defer python.decref(py_scope);
+    const py_scope = try python.base.createPyDict(allocator, scope);
+    defer python.base.decref(py_scope);
 
     std.debug.print("DEBUG: Creating receive callable\n", .{});
     // Create callables
     // const receive = try python.createReceiveCallable(&to_app);
     const receive = try python.create_receive_vectorcall_callable(&to_app);
-    defer python.decref(receive);
+    defer python.base.decref(receive);
 
     std.debug.print("DEBUG: Creating send callable\n", .{});
     // const send = try python.createSendCallable(&from_app);
     const send = try python.create_send_vectorcall_callable(&from_app);
-    defer python.decref(send);
+    defer python.base.decref(send);
 
     std.debug.print("DEBUG: Creating startup message\n", .{});
     // Send startup message
     const startup_msg = try asgi.createLifespanStartupMessage(allocator);
     defer asgi.jsonValueDeinit(startup_msg, allocator);
-    try to_app.push(startup_msg);
 
-    // Call the application (don't wait for it to complete)
-    // const app_thread = try std.Thread.spawn(.{}, callAppLifespan, .{
-    //     app, py_scope, receive, send, logger,
-    // });
-    try callAppLifespan(app, py_scope, receive, send, logger);
-    // Wait for startup.complete or startup.failed
+    // Add the startup message to the queue BEFORE calling the application
+    try to_app.push(startup_msg);
+    std.debug.print("DEBUG: Pushed startup message to queue\n", .{});
+
+    // Call the application (wait for it to complete)
+    try python.callAsgiApplication(app, py_scope, receive, send, loop);
     logger.info("Finished calling lifespan", .{});
+
+    // Wait for startup.complete or startup.failed
     while (true) {
         var event = try from_app.receive();
         defer asgi.jsonValueDeinit(event, allocator);
@@ -388,9 +389,6 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
             break;
         }
     }
-
-    // Don't wait for the thread to complete - it will run for the lifetime of the application
-    // app_thread.detach();
 }
 
 /// Call the ASGI application for lifespan protocol
