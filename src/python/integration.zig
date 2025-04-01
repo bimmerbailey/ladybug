@@ -41,6 +41,8 @@ pub const AsgiCallableObject = extern struct {
     ob_base: PyObject,
     // Custom data follows
     queue: ?*protocol.MessageQueue,
+    // Event loop to run tasks
+    loop: *PyObject,
 };
 
 // TODO: Come back to this once more familiar
@@ -62,6 +64,7 @@ pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*pyth
 
     const receive_obj = @as(*AsgiCallableObject, @ptrCast(callable.?));
     const queue = receive_obj.queue.?;
+    const loop = receive_obj.loop;
 
     // Spawn a separate thread to wait for the message
     const thread_state = python.PyEval_SaveThread();
@@ -84,45 +87,17 @@ pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*pyth
         return python.og.PyDict_New();
     };
 
-    // Create async task for awaiting
-    const asyncio = python.og.PyImport_ImportModule("asyncio");
-    if (asyncio == null) {
-        _ = python.PyErr_SetString(python.PyExc_ImportError, "Failed to import asyncio");
-        return python.og.PyDict_New();
+    // Call create_asgi_future_for_event_loop and check for errors explicitly
+    const future_or_error = create_asgi_future_for_event_loop(py_message, loop);
+    if (future_or_error) |future| {
+        std.debug.print("DEBUG: asgi_receive_vectorcall returning future: {*}\n", .{future});
+        return future;
+    } else |err| {
+        // Handle the error (e.g., set Python exception)
+        std.debug.print("Error creating ASGI future: {}\n", .{err});
+        _ = python.og.PyErr_SetString(python.PyExc_RuntimeError, "Failed to create future for event loop");
+        return python.og.PyDict_New(); // Return empty dict for Python error
     }
-    defer decref(asyncio);
-
-    // Create a Future to handle asynchronous receive
-    const future_type = python.og.PyObject_GetAttrString(asyncio, "Future");
-    if (future_type == null) {
-        _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get Future");
-        return python.og.PyDict_New();
-    }
-    defer decref(future_type);
-
-    const future = python.og.PyObject_CallObject(future_type, null);
-    if (future == null) {
-        return python.og.PyDict_New();
-    }
-
-    // Set the result on the future
-    const set_result = python.og.PyObject_GetAttrString(future, "set_result");
-    if (set_result == null) {
-        decref(future.?);
-        return python.og.PyDict_New();
-    }
-    defer decref(set_result);
-
-    // Set the result with our message
-    const result = python.zig_call_function_with_arg(set_result, py_message);
-    if (result == null) {
-        decref(future.?);
-        return python.og.PyDict_New();
-    }
-    decref(result.?);
-
-    std.debug.print("DEBUG: asgi_receive_vectorcall returning future: {*}\n", .{future});
-    return future;
 }
 
 // The await function: This gets called when `await receive()` is used
@@ -148,7 +123,7 @@ var ReceiveType = PyTypeObject{
     .tp_doc = python.og.PyDoc_STR("Receive a message from the queue"),
 };
 
-pub fn create_receive_vectorcall_callable(queue: *protocol.MessageQueue) !*python.PyObject {
+pub fn create_receive_vectorcall_callable(queue: *protocol.MessageQueue, loop: *PyObject) !*python.PyObject {
     if (python.og.PyType_Ready(&ReceiveType) < 0) return error.PythonTypeInitFailed;
 
     // Use PyType_GenericAlloc to create an instance of the type
@@ -158,22 +133,10 @@ pub fn create_receive_vectorcall_callable(queue: *protocol.MessageQueue) !*pytho
     // Cast to our custom object type to access the queue field
     const receive_obj = @as(*AsgiCallableObject, @ptrCast(instance));
     receive_obj.queue = queue;
+    receive_obj.loop = loop;
 
     // Return as a PyObject*
     return @as(*python.PyObject, @ptrCast(receive_obj));
-}
-
-pub fn handle_send_message(message: [*c]python.PyObject) void {
-    std.debug.print("DEBUG: Received message: {*}\n", .{message});
-
-    // Convert to JSON
-
-    // const event_type_str = python.og.PyUnicode_AsUTF8(message);
-    // const event_type = python.og.PyDict_GetItemString(event_type_str, "type");
-    // std.debug.print("DEBUG: Received event type: {s}\n", .{event_type});
-    // if (std.mem.eql(u8, event_type_str, "http.response.start")) {
-    //     std.debug.print("Received response headers\n", .{});
-    // }
 }
 
 pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
@@ -277,6 +240,98 @@ pub fn create_send_vectorcall_callable(queue: *protocol.MessageQueue) !*python.P
     return @as(*python.PyObject, @ptrCast(send_obj));
 }
 
+pub fn create_app_coroutine_for_event_loop(function: *PyObject, args: *PyObject, loop: *PyObject) !*PyObject {
+
+    // Debug the send object type
+    if (python.og.PyCallable_Check(function) == 0) {
+        std.debug.print("DEBUG: send is not callable!\n", .{});
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+    std.debug.print("DEBUG: send is callable\n", .{});
+    std.debug.print("DEBUG: Calling PyObject_CallObject\n", .{});
+
+    // NOTE: Calls object to create a coroutine
+    const coroutine = python.og.PyObject_CallObject(function, args);
+    python.decref(args);
+
+    if (coroutine == null) {
+        std.debug.print("DEBUG: Call failed\n", .{});
+        handlePythonError();
+        return PythonError.CallFailed;
+    }
+
+    const asyncio = try base.importModule("asyncio");
+    defer python.decref(asyncio);
+
+    // Get the run_coroutine_threadsafe function
+    const run_coro = try base.getAttribute(asyncio, "run_coroutine_threadsafe");
+    defer python.decref(run_coro);
+
+    // Create args for run_coroutine_threadsafe - needs (coro, loop)
+    const run_args = python.og.PyTuple_New(2);
+    if (run_args == null) {
+        python.decref(coroutine.?);
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+    defer python.decref(run_args.?);
+
+    // PyTuple_SetItem steals references
+    if (python.og.PyTuple_SetItem(run_args.?, 0, coroutine.?) < 0 or
+        python.og.PyTuple_SetItem(run_args.?, 1, loop) < 0)
+    {
+        python.decref(coroutine.?);
+        python.decref(run_args.?);
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+
+    // Run the coroutine in the event loop
+    const future = python.og.PyObject_CallObject(run_coro, run_args.?);
+    if (future == null) {
+        std.debug.print("DEBUG: run_coroutine_threadsafe failed\n", .{});
+        handlePythonError();
+        return PythonError.CallFailed;
+    }
+    std.debug.print("DEBUG: run_coroutine_threadsafe succeeded, got future: {*}\n", .{future.?});
+
+    // NOTE: Return future to be awaited
+    return future;
+}
+
+pub fn create_asgi_future_for_event_loop(value: *PyObject, loop: *PyObject) !*PyObject {
+
+    // Get the run_coroutine_threadsafe function
+    const create_future = try base.getAttribute(@as(*PyObject, loop), "create_future");
+    defer python.decref(create_future);
+
+    const future = python.og.PyObject_CallObject(create_future, python.PyTuple_New(0));
+    if (future == null) {
+        std.debug.print("DEBUG: create_future failed\n", .{});
+        return python.og.PyDict_New();
+    }
+    std.debug.print("DEBUG: create_future succeeded, got future\n", .{});
+
+    // NOTE: Return future to be awaited
+    // Set the result on the future
+    const set_result = python.og.PyObject_GetAttrString(future, "set_result");
+    if (set_result == null) {
+        decref(future.?);
+        return python.og.PyDict_New();
+    }
+    defer decref(set_result);
+
+    // Set the result with our message
+    const result = python.zig_call_function_with_arg(set_result, value);
+    if (result == null) {
+        decref(future.?);
+        return python.og.PyDict_New();
+    }
+    decref(result.?);
+    return @as(*PyObject, future);
+}
+
 /// Call an ASGI application with scope, receive, and send
 pub fn callAsgiApplication(app: *PyObject, scope: *PyObject, receive: *PyObject, send: *PyObject, loop: *PyObject) !void {
     std.debug.print("\nDEBUG: Calling ASGI application\n", .{});
@@ -341,68 +396,26 @@ pub fn callAsgiApplication(app: *PyObject, scope: *PyObject, receive: *PyObject,
         return PythonError.RuntimeError;
     }
 
-    std.debug.print("DEBUG: Calling PyObject_CallObject\n", .{});
-    const coroutine = python.og.PyObject_CallObject(app, args.?);
-    python.decref(args.?);
-
-    if (coroutine == null) {
-        std.debug.print("DEBUG: Call failed\n", .{});
-        handlePythonError();
-        return PythonError.CallFailed;
-    }
-    std.debug.print("DEBUG: Call succeeded of asgi app, got coroutine: {*}\n", .{coroutine.?});
-
-    // Import asyncio to get run_coroutine_threadsafe
-    const asyncio = try base.importModule("asyncio");
-    defer python.decref(asyncio);
-
-    // Get the run_coroutine_threadsafe function
-    const run_coro = try base.getAttribute(asyncio, "run_coroutine_threadsafe");
-    defer python.decref(run_coro);
-
-    // Create args for run_coroutine_threadsafe - needs (coro, loop)
-    const run_args = python.og.PyTuple_New(2);
-    if (run_args == null) {
-        python.decref(coroutine.?);
-        handlePythonError();
-        return PythonError.RuntimeError;
-    }
-    defer python.decref(run_args.?);
-
-    // PyTuple_SetItem steals references
-    if (python.og.PyTuple_SetItem(run_args.?, 0, coroutine.?) < 0 or
-        python.og.PyTuple_SetItem(run_args.?, 1, loop) < 0)
-    {
-        python.decref(coroutine.?);
-        python.decref(run_args.?);
-        handlePythonError();
-        return PythonError.RuntimeError;
-    }
-
-    // Run the coroutine in the event loop
-    const future = python.og.PyObject_CallObject(run_coro, run_args.?);
-    if (future == null) {
-        std.debug.print("DEBUG: run_coroutine_threadsafe failed\n", .{});
-        handlePythonError();
-        return PythonError.CallFailed;
-    }
-    std.debug.print("DEBUG: run_coroutine_threadsafe succeeded, got future: {*}\n", .{future.?});
+    const future = try create_app_coroutine_for_event_loop(app, args, loop);
 
     // Get the result() method from the future
-    const result_method = try base.getAttribute(future.?, "result");
+    const result_method = base.getAttribute(future, "result") catch {
+        handlePythonError();
+        return PythonError.RuntimeError;
+    };
     defer python.decref(result_method);
 
     // Call result() to get the actual result
     const result = python.og.PyObject_CallObject(result_method, python.og.PyTuple_New(0));
     if (result == null) {
-        python.decref(future.?);
+        python.decref(future);
         handlePythonError();
         return PythonError.CallFailed;
     }
     std.debug.print("DEBUG: Got result from future: {*}\n", .{result.?});
 
     // Clean up
-    python.decref(future.?);
+    python.decref(future);
     python.decref(result.?);
 
     std.debug.print("DEBUG: ASGI application call completed\n", .{});

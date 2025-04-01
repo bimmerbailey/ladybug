@@ -229,7 +229,7 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     // Push initial http.request message
     try to_app.push(jsonScope);
 
-    const receive = try python.create_receive_vectorcall_callable(&to_app);
+    const receive = try python.create_receive_vectorcall_callable(&to_app, loop);
     defer python.base.decref(receive);
 
     const send = try python.create_send_vectorcall_callable(&from_app);
@@ -347,7 +347,7 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
     std.debug.print("DEBUG: Creating receive callable\n", .{});
     // Create callables
     // const receive = try python.createReceiveCallable(&to_app);
-    const receive = try python.create_receive_vectorcall_callable(&to_app);
+    const receive = try python.create_receive_vectorcall_callable(&to_app, loop);
     defer python.base.decref(receive);
 
     std.debug.print("DEBUG: Creating send callable\n", .{});
