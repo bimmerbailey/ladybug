@@ -14,6 +14,7 @@ const PyTypeObject = python.og.PyTypeObject;
 const decref = base.decref;
 const handlePythonError = base.handlePythonError;
 const PythonError = base.PythonError;
+pub const c = base.c;
 
 /// Load a Python ASGI application
 pub fn loadApplication(module_path: []const u8, app_name: []const u8) !*python.PyObject {

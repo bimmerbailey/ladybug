@@ -7,6 +7,7 @@ const protocol = @import("protocol");
 // Export the PyObject type for external use
 pub const PyObject = python.og.PyObject;
 const PyTypeObject = python.og.PyTypeObject;
+pub const c = python.og;
 
 // Helper function to replace all Py_INCREF and Py_DECREF calls throughout the file
 pub fn incref(obj: *PyObject) void {
@@ -401,4 +402,87 @@ fn getNoneForCallback() ?*PyObject {
     const none = python.getPyNone();
     python.incref(none);
     return none;
+}
+
+/// Create a Python function from a Zig function pointer
+pub fn createPythonFunction(
+    name: []const u8,
+    doc: []const u8,
+    func: *const fn (self: *PyObject, args: *PyObject) callconv(.C) ?*PyObject,
+    flags: c_int,
+) !*PyObject {
+    std.debug.print("DEBUG: Creating Python function: {s}\n", .{name});
+
+    // Create method definition
+    var method_def = python.og.PyMethodDef{
+        .ml_name = name.ptr,
+        .ml_meth = @ptrCast(func),
+        .ml_flags = flags,
+        .ml_doc = doc.ptr,
+    };
+
+    // Create the Python function
+    const py_func = python.og.PyCFunction_New(&method_def, null);
+    if (py_func == null) {
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+
+    std.debug.print("DEBUG: Successfully created Python function: {s}\n", .{name});
+    return py_func.?;
+}
+
+/// Create a Python function from a Zig function and list of arguments
+pub fn createPythonFunctionFromArgs(
+    name: []const u8,
+    doc: []const u8,
+    func: *const fn (args: [*]*PyObject) callconv(.C) ?*PyObject,
+    args: []const []const u8,
+) !*PyObject {
+    std.debug.print("DEBUG: Creating Python function: {s} with {d} arguments\n", .{ name, args.len });
+
+    const WrapperFn = fn (*PyObject, *PyObject) callconv(.C) ?*PyObject;
+    const wrapper: WrapperFn = struct {
+        fn f(_: *PyObject, py_args: *PyObject) callconv(.C) ?*PyObject {
+            // Convert Python args to a slice of PyObject pointers
+            const args_size = python.og.PyTuple_Size(py_args);
+            if (args_size < 0) {
+                handlePythonError();
+                return null;
+            }
+
+            // Create a slice to hold the arguments
+            var args_slice: [*]*PyObject = undefined;
+            var i: c_long = 0;
+            while (i < args_size) : (i += 1) {
+                const arg = python.og.PyTuple_GetItem(py_args, i);
+                if (arg == null) {
+                    handlePythonError();
+                    return null;
+                }
+                args_slice[@intCast(i)] = arg.?;
+            }
+
+            // Call the original function with the converted arguments
+            return func(args_slice);
+        }
+    }.f;
+
+    // Create method definition
+    var method_def = python.og.PyMethodDef{
+        .ml_name = name.ptr,
+        .ml_meth = @ptrCast(wrapper),
+        .ml_flags = python.og.METH_VARARGS,
+        .ml_doc = doc.ptr,
+    };
+
+    // Create the Python function
+    const py_func = python.og.PyCFunction_New(&method_def, null);
+    if (py_func == null) {
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+
+    std.debug.print("DEBUG: Successfully created Python function: {s}\n", .{name});
+    return py_func.?;
 }

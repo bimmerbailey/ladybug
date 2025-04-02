@@ -18,6 +18,32 @@ const protocol = @import("protocol");
 pub const PyObject = python.og.PyObject;
 const PyTypeObject = python.og.PyTypeObject;
 
+pub fn asyncio_run(function: *PyObject, args: *PyObject) !void {
+    const coroutine = python.PyObject_CallObject(function, args);
+    if (coroutine == null) {
+        handlePythonError();
+        return PythonError.RuntimeError;
+    }
+    defer python.decref(coroutine.?);
+
+    const asyncio = try importModule("asyncio");
+    defer decref(asyncio);
+
+    const run_func = try getAttribute(asyncio, "run");
+    defer decref(run_func);
+
+    // Call asyncio.run(coroutine)
+    const result = python.og.PyObject_CallObject(run_func.?, coroutine.?);
+    if (result == null) {
+        std.debug.print("DEBUG: asyncio.run failed\n", .{});
+        handlePythonError();
+        return PythonError.CallFailed;
+    }
+
+    std.debug.print("DEBUG: asyncio.run succeeded, result: {*}\n", .{result.?});
+    python.decref(result.?);
+}
+
 pub fn is_loop_running(loop: *PyObject) bool {
     const is_running_cmd = try getAttribute(loop, "is_running");
     defer decref(is_running_cmd);

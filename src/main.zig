@@ -112,32 +112,7 @@ fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     pool.stop();
 }
 
-fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger, module_name: []const u8, app_name: []const u8) !void {
-    std.debug.print("DEBUG: Running worker\n", .{});
-
-    // Set up Python interpreter
-    try python.base.initialize();
-    defer python.base.finalize();
-
-    // Create and set up the event loop
-    const event_loop = try python.event_loop.createAndSetEventLoop();
-    defer python.base.decref(event_loop);
-
-    // Load ASGI application
-    logger.info("Loading ASGI application from {s}:{s}", .{ module_name, app_name });
-    const app = try python.loadApplication(module_name, app_name);
-    defer python.base.decref(app);
-
-    logger.info("Starting ladybug ASGI server...", .{});
-
-    // Create HTTP server
-    const server_config = http.Config{
-        .host = options.host,
-        .port = options.port,
-    };
-
-    var server = http.Server.init(allocator, server_config);
-    defer server.stop();
+fn run_server(server: *http.Server, app: *python.PyObject, event_loop: *python.PyObject, logger: *const utils.Logger, server_config: http.Config, options: *cli.Options, allocator: std.mem.Allocator) !void {
 
     // Start the server
     try server.start();
@@ -171,6 +146,152 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
         // });
         // thread.detach();
     }
+}
+
+// Define a struct for the receive callable that includes the queue pointer
+pub const ServerCallableObject = extern struct {
+    server: *http.Server,
+    app: *python.PyObject,
+    logger: *const utils.Logger,
+    server_config: http.Config,
+    options: *cli.Options,
+    allocator: std.mem.Allocator,
+    event_loop: *python.PyObject,
+};
+
+pub fn create_server_callable(
+    server: *http.Server,
+    app: *python.PyObject,
+    logger: *const utils.Logger,
+    server_config: http.Config,
+    options: *cli.Options,
+    allocator: std.mem.Allocator,
+    event_loop: *python.PyObject,
+) !*python.PyObject {
+    const server_type = python.c.PyTypeObject{
+        .tp_name = "ladybug.ServerCallableObject",
+        .tp_basicsize = @sizeOf(ServerCallableObject),
+        .tp_itemsize = 0,
+        .tp_flags = python.c.Py_TPFLAGS_DEFAULT,
+        .tp_doc = "Server callable object",
+        .tp_methods = &[_]python.c.PyMethodDef{
+            .{
+                .ml_name = "run_server",
+                .ml_meth = @ptrCast(_server_wrapper),
+            },
+        },
+        .tp_new = @ptrCast(new),
+        .tp_as_async = &python.c.PyAsyncMethods{
+            .am_await = @ptrCast(_server_wrapper),
+            .am_aiter = @ptrCast(aiter),
+            .am_anext = @ptrCast(aiter_next),
+            .am_send = @ptrCast(aiter_send),
+        },
+    };
+
+    if (python.og.PyType_Ready(server_type) < 0) return error.PythonTypeInitFailed;
+
+    // Use PyType_GenericAlloc to create an instance of the type
+    const instance = python.og.PyType_GenericAlloc(server_type, 0);
+    if (instance == null) return error.PythonAllocationFailed;
+
+    // Cast to our custom object type to access the queue field
+    const server_obj = @as(*ServerCallableObject, @ptrCast(instance));
+    server_obj.server = server;
+    server_obj.app = app;
+    server_obj.logger = logger;
+    server_obj.server_config = server_config;
+    server_obj.options = options;
+    server_obj.allocator = allocator;
+    server_obj.event_loop = event_loop;
+
+    // Return as a PyObject*
+    return @as(*python.PyObject, @ptrCast(server_obj));
+}
+
+fn new(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?*python.PyObject {
+    _ = args;
+    return @as(*ServerCallableObject, @ptrCast(self));
+}
+
+fn aiter_send(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?*python.PyObject {
+    _ = self;
+    _ = args;
+    return null;
+}
+
+fn aiter(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?*python.PyObject {
+    _ = self;
+    _ = args;
+    return null;
+}
+
+fn aiter_next(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?*python.PyObject {
+    _ = self;
+    _ = args;
+    return null;
+}
+
+fn _server_wrapper(self: *python.PyObject, args: *python.PyObject) callconv(.C) ?*python.PyObject {
+    _ = self;
+    const server = try python.base.c.PyTuple_GetItem(args, 0) catch return null;
+    const app = try python.base.c.PyTuple_GetItem(args, 1) catch return null;
+    const logger = try python.base.c.PyTuple_GetItem(args, 2) catch return null;
+    const server_config = try python.base.c.PyTuple_GetItem(args, 3) catch return null;
+    const options = try python.base.c.PyTuple_GetItem(args, 4) catch return null;
+    const allocator = try python.base.c.PyTuple_GetItem(args, 5) catch return null;
+    const event_loop = try python.base.c.PyTuple_GetItem(args, 6) catch return null;
+
+    try run_server(server, app, event_loop, logger, server_config, options, allocator);
+    return null;
+}
+
+fn run_server_in_event_loop(server: *http.Server, app: *python.PyObject, logger: *const utils.Logger, server_config: http.Config, options: *cli.Options, allocator: std.mem.Allocator, event_loop: *python.PyObject) !void {
+    // Start the server
+    // const server_args = python.base.c.PyTuple_New(7);
+    // defer python.base.decref(server_args);
+    // try python.base.c.PyTuple_SetItem(server_args, 0, server);
+    // try python.base.c.PyTuple_SetItem(server_args, 1, app);
+    // try python.base.c.PyTuple_SetItem(server_args, 2, logger);
+    // try python.base.c.PyTuple_SetItem(server_args, 3, server_config);
+    // try python.base.c.PyTuple_SetItem(server_args, 4, options);
+    // try python.base.c.PyTuple_SetItem(server_args, 5, allocator);
+    // try python.base.c.PyTuple_SetItem(server_args, 6, event_loop);
+
+    // const python_func = python.base.createPythonFunction("server", python.c.PyDoc_STR("Run the server"), _server_wrapper, python.base.c.METH_VARARGS);
+    // defer python.base.decref(python_func);
+    try run_server(server, app, event_loop, logger, server_config, options, allocator);
+    // try python.event_loop.asyncio_run(python_func, server_args);
+}
+
+fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger, module_name: []const u8, app_name: []const u8) !void {
+    std.debug.print("DEBUG: Running worker\n", .{});
+
+    // Set up Python interpreter
+    try python.base.initialize();
+    defer python.base.finalize();
+
+    // Create and set up the event loop
+    const event_loop = try python.event_loop.createAndSetEventLoop();
+    defer python.base.decref(event_loop);
+
+    // Load ASGI application
+    logger.info("Loading ASGI application from {s}:{s}", .{ module_name, app_name });
+    const app = try python.loadApplication(module_name, app_name);
+    defer python.base.decref(app);
+
+    logger.info("Starting ladybug ASGI server...", .{});
+
+    // Create HTTP server
+    const server_config = http.Config{
+        .host = options.host,
+        .port = options.port,
+    };
+
+    var server = http.Server.init(allocator, server_config);
+    defer server.stop();
+
+    try run_server_in_event_loop(&server, app, logger, server_config, options, allocator, event_loop);
 }
 
 /// Handle an HTTP connection

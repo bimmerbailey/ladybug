@@ -42,10 +42,10 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
     print(f"DEBUG: test_func flags: {test_func.__code__.co_flags}")
     print(f"DEBUG: test_func callable: {callable(test_func)}\n")
 
-    # Inspect callable for info
-    print(f"DEBUG: callable type: {type(receive_callable)}")
-    print(f"DEBUG: callable dir: {dir(receive_callable)}")
-    print(f"DEBUG: callable is coroutine: {asyncio.iscoroutinefunction(receive_callable)}")
+    # Inspect receive_callable for info
+    print(f"DEBUG: receive_callable type: {type(receive_callable)}")
+    print(f"DEBUG: receive_callable dir: {dir(receive_callable)}")
+    print(f"DEBUG: receive_callable is coroutine: {asyncio.iscoroutinefunction(receive_callable)}")
 
     # Inspect the receive and send objects
     print(f"DEBUG: receive dir: {dir(receive)}")
