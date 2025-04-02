@@ -16,6 +16,12 @@ async def test_func():
     print("DEBUG: Exiting test_func")
     return {"type": "http.response.body", "body": "Hello, world!"}
 
+class ReceiveCallable:
+    def __await__(self):
+        print("DEBUG: In __await__")
+        print("DEBUG: Exiting __await__")
+        return {"type": "http.response.body", "body": "Hello, world!"}
+receive_callable = ReceiveCallable()
 
 async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, Any]]], send: Callable[[Dict[str, Any]], Awaitable[None]]) -> None:
     """
@@ -35,6 +41,11 @@ async def app(scope: Dict[str, Any], receive: Callable[[], Awaitable[Dict[str, A
     print(f"DEBUG: test_func qualname: {getattr(test_func, "__qualname__")}")
     print(f"DEBUG: test_func flags: {test_func.__code__.co_flags}")
     print(f"DEBUG: test_func callable: {callable(test_func)}\n")
+
+    # Inspect callable for info
+    print(f"DEBUG: callable type: {type(receive_callable)}")
+    print(f"DEBUG: callable dir: {dir(receive_callable)}")
+    print(f"DEBUG: callable is coroutine: {asyncio.iscoroutinefunction(receive_callable)}")
 
     # Inspect the receive and send objects
     print(f"DEBUG: receive dir: {dir(receive)}")

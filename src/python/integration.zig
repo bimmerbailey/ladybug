@@ -144,7 +144,7 @@ pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.
 
     const send_obj = @as(*AsgiCallableObject, @ptrCast(callable.?));
     const queue = send_obj.queue.?;
-
+    const loop = send_obj.loop;
     std.debug.print("DEBUG: In asgi_send_vectorcall, queue: {*}\n", .{queue});
 
     // NOTE: Checks if args is null, then sets an error and returns None
@@ -171,48 +171,16 @@ pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.
     }
 
     const value = python.getPyNone();
-
-    // Create async task for awaiting
-    const asyncio = python.og.PyImport_ImportModule("asyncio");
-    if (asyncio == null) {
-        _ = python.PyErr_SetString(python.PyExc_ImportError, "Failed to import asyncio");
-        return python.og.PyDict_New();
-    }
-    defer decref(asyncio);
-
-    // TODO: Future is deprecated in Python 3.10
-    // Create a Future to handle asynchronous receive
-    const future_type = python.og.PyObject_GetAttrString(asyncio, "Future");
-    if (future_type == null) {
-        _ = python.PyErr_SetString(python.PyExc_AttributeError, "Failed to get Future");
+    const future_or_error = create_asgi_future_for_event_loop(value, loop);
+    if (future_or_error) |future| {
+        std.debug.print("DEBUG: asgi_send_vectorcall returning future: {*}\n", .{future});
+        return future;
+    } else |err| {
+        // Handle the error (e.g., set Python exception)
+        std.debug.print("Error creating ASGI future: {}\n", .{err});
+        _ = python.og.PyErr_SetString(python.PyExc_RuntimeError, "Failed to create future for event loop");
         return python.og.Py_None();
     }
-    defer decref(future_type);
-
-    const future = python.og.PyObject_CallObject(future_type, null);
-    if (future == null) {
-        return python.og.Py_None();
-    }
-
-    // Set the result on the future
-    const set_result = python.og.PyObject_GetAttrString(future, "set_result");
-    if (set_result == null) {
-        decref(future.?);
-        return python.og.Py_None();
-    }
-    defer decref(set_result);
-
-    // Set the result with our message
-    const result = python.zig_call_function_with_arg(set_result, value);
-    if (result == null) {
-        decref(future.?);
-        return python.og.Py_None();
-    }
-    decref(result.?);
-    decref(value);
-
-    std.debug.print("DEBUG: asgi_send_vectorcall returning future: {*}\n", .{future});
-    return future;
 }
 var SendType = PyTypeObject{
     .ob_base = undefined,
@@ -225,7 +193,7 @@ var SendType = PyTypeObject{
     .tp_doc = python.og.PyDoc_STR("Send a message to the queue"),
 };
 
-pub fn create_send_vectorcall_callable(queue: *protocol.MessageQueue) !*python.PyObject {
+pub fn create_send_vectorcall_callable(queue: *protocol.MessageQueue, loop: *PyObject) !*python.PyObject {
     if (python.og.PyType_Ready(&SendType) < 0) return error.PythonTypeInitFailed;
 
     // Use PyType_GenericAlloc to create an instance of the type
@@ -235,7 +203,7 @@ pub fn create_send_vectorcall_callable(queue: *protocol.MessageQueue) !*python.P
     // Cast to our custom object type to access the queue field
     const send_obj = @as(*AsgiCallableObject, @ptrCast(instance));
     send_obj.queue = queue;
-
+    send_obj.loop = loop;
     // Return as a PyObject*
     return @as(*python.PyObject, @ptrCast(send_obj));
 }

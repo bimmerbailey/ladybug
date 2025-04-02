@@ -232,7 +232,7 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     const receive = try python.create_receive_vectorcall_callable(&to_app, loop);
     defer python.base.decref(receive);
 
-    const send = try python.create_send_vectorcall_callable(&from_app);
+    const send = try python.create_send_vectorcall_callable(&from_app, loop);
     defer python.base.decref(send);
 
     std.debug.print("\nDEBUG: Calling ASGI application from handleConnection\n", .{});
@@ -352,7 +352,7 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
 
     std.debug.print("DEBUG: Creating send callable\n", .{});
     // const send = try python.createSendCallable(&from_app);
-    const send = try python.create_send_vectorcall_callable(&from_app);
+    const send = try python.create_send_vectorcall_callable(&from_app, loop);
     defer python.base.decref(send);
 
     std.debug.print("DEBUG: Creating startup message\n", .{});
