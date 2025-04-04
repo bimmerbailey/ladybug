@@ -6,12 +6,12 @@ import sys
 import os
 
 # When running from Zig, ensure the root directory is in Python's path
-current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
-    print(f"Added {current_dir} to Python path")
+# current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# if current_dir not in sys.path:
+#     sys.path.insert(0, current_dir)
+#     print(f"Added {current_dir} to Python path")
 
-print(f"Python import path: {sys.path}")
+# print(f"Python import path: {sys.path}")
 
 async def app(scope, receive, send):
     """
@@ -144,7 +144,7 @@ async def handle_lifespan(scope, receive, send):
     while True:
         message = await receive()
         if message["type"] == "lifespan.startup":
-            print("Server is starting up")
+            print("IN PYTHON: Server is starting up")
             await send({"type": "lifespan.startup.complete"})
         elif message["type"] == "lifespan.shutdown":
             print("Server is shutting down")

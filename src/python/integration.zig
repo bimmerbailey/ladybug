@@ -219,53 +219,101 @@ pub fn create_app_coroutine_for_event_loop(function: *PyObject, args: *PyObject,
     std.debug.print("DEBUG: send is callable\n", .{});
     std.debug.print("DEBUG: Calling PyObject_CallObject\n", .{});
 
+    // --- GIL ACQUIRE NEEDED BEFORE MOST PYTHON API CALLS ---
+    const gil_state = python.og.PyGILState_Ensure(); // Acquire GIL
+
     // NOTE: Calls object to create a coroutine
     const coroutine = python.og.PyObject_CallObject(function, args);
-    python.decref(args);
+    // No need to decref args here, it's passed in and owned by the caller.
+    // The caller should decref it after this function returns or in its own error handling.
+    // python.decref(args); // Removed this decref
 
     if (coroutine == null) {
         std.debug.print("DEBUG: Call failed\n", .{});
         handlePythonError();
+        python.og.PyGILState_Release(gil_state); // Release GIL
         return PythonError.CallFailed;
     }
+    // coroutine is a new reference
 
-    const asyncio = try base.importModule("asyncio");
-    defer python.decref(asyncio);
+    const asyncio = base.importModule("asyncio") catch |err| {
+        python.decref(coroutine.?); // Clean up coroutine on error
+        handlePythonError();
+        python.og.PyGILState_Release(gil_state); // Release GIL
+        return err;
+    };
+    // asyncio is a new reference
 
     // Get the run_coroutine_threadsafe function
-    const run_coro = try base.getAttribute(asyncio, "run_coroutine_threadsafe");
-    defer python.decref(run_coro);
+    const run_coro_fn = base.getAttribute(asyncio, "run_coroutine_threadsafe") catch |err| {
+        python.decref(asyncio); // Clean up asyncio on error
+        python.decref(coroutine.?); // Clean up coroutine on error
+        handlePythonError();
+        python.og.PyGILState_Release(gil_state); // Release GIL
+        return err;
+    };
+    // run_coro_fn is a new reference
 
     // Create args for run_coroutine_threadsafe - needs (coro, loop)
     const run_args = python.og.PyTuple_New(2);
     if (run_args == null) {
+        python.decref(run_coro_fn);
+        python.decref(asyncio);
         python.decref(coroutine.?);
         handlePythonError();
+        python.og.PyGILState_Release(gil_state); // Release GIL
         return PythonError.RuntimeError;
     }
-    defer python.decref(run_args.?);
+    // run_args is a new reference
 
-    // PyTuple_SetItem steals references
+    // PyTuple_SetItem does NOT steal references. We incref the items
+    // because the tuple will hold a reference to them.
+    python.incref(coroutine.?); // Tuple takes a reference
+    python.incref(loop); // Tuple takes a reference
     if (python.og.PyTuple_SetItem(run_args.?, 0, coroutine.?) < 0 or
         python.og.PyTuple_SetItem(run_args.?, 1, loop) < 0)
     {
-        python.decref(coroutine.?);
+        python.decref(loop); // decref if SetItem failed
+        python.decref(coroutine.?); // decref if SetItem failed
         python.decref(run_args.?);
+        python.decref(run_coro_fn);
+        python.decref(asyncio);
         handlePythonError();
+        python.og.PyGILState_Release(gil_state); // Release GIL
         return PythonError.RuntimeError;
     }
 
-    // Run the coroutine in the event loop
-    const future = python.og.PyObject_CallObject(run_coro, run_args.?);
+    // Now run_args owns the references passed to SetItem.
+    // We still have our original references to coroutine and loop.
+
+    // Run the coroutine in the event loop thread-safely
+    // Note: run_coroutine_threadsafe itself likely releases the GIL internally for the call,
+    // but we acquired it for the setup above and need it for cleanup below.
+    const future = python.og.PyObject_CallObject(run_coro_fn, run_args.?);
+
+    // Clean up references we are done with now that the call is made/setup is done
+    python.decref(run_args.?); // Decref the tuple, which decrefs items it holds (coroutine, loop)
+    python.decref(run_coro_fn);
+    python.decref(asyncio);
+    python.decref(coroutine.?); // Decref our original reference to coroutine
+
+    // We don't decref the loop, as it was passed in and is owned elsewhere.
+
     if (future == null) {
         std.debug.print("DEBUG: run_coroutine_threadsafe failed\n", .{});
-        handlePythonError();
+        handlePythonError(); // Check/print Python error state
+        python.og.PyGILState_Release(gil_state); // Release GIL
         return PythonError.CallFailed;
     }
+    // future is a new reference
+
+    // Release the GIL before returning the future
+    python.og.PyGILState_Release(gil_state); // Release GIL
+
     std.debug.print("DEBUG: run_coroutine_threadsafe succeeded, got future: {*}\n", .{future.?});
 
-    // NOTE: Return future to be awaited
-    return future;
+    // NOTE: Return future (new reference) to be awaited
+    return future.?;
 }
 
 pub fn create_asgi_future_for_event_loop(value: *PyObject, loop: *PyObject) !*PyObject {
@@ -343,48 +391,88 @@ pub fn callAsgiApplication(app: *PyObject, scope: *PyObject, receive: *PyObject,
     const args = python.og.PyTuple_New(3);
     if (args == null) {
         std.debug.print("DEBUG: Failed to create args tuple\n", .{});
+        // No GIL needed yet, but acquire for consistency if we add Py calls here later
+        const gil_state = python.og.PyGILState_Ensure();
         handlePythonError();
+        python.og.PyGILState_Release(gil_state);
         return PythonError.RuntimeError;
     }
-
     std.debug.print("DEBUG: Args tuple created successfully: {*}\n", .{args.?});
 
-    // Set the tuple items - PyTuple_SetItem steals references
+    // --- GIL NEEDED FOR TUPLE SETUP ---
+    var gil_state = python.og.PyGILState_Ensure(); // Acquire GIL
+
+    // Set the tuple items - PyTuple_SetItem does NOT steal refs. Incref needed.
     python.incref(scope);
     python.incref(receive);
     python.incref(send);
 
-    if (python.og.PyTuple_SetItem(args.?, 0, scope) < 0 or
-        python.og.PyTuple_SetItem(args.?, 1, receive) < 0 or
-        python.og.PyTuple_SetItem(args.?, 2, send) < 0)
-    {
+    var set_item_failed = false;
+    if (python.og.PyTuple_SetItem(args.?, 0, scope) < 0) set_item_failed = true;
+    if (!set_item_failed and python.og.PyTuple_SetItem(args.?, 1, receive) < 0) set_item_failed = true;
+    if (!set_item_failed and python.og.PyTuple_SetItem(args.?, 2, send) < 0) set_item_failed = true;
+
+    if (set_item_failed) {
         std.debug.print("DEBUG: Failed to set values in tuple\n", .{});
+        python.decref(send); // Decref if not put in tuple
+        python.decref(receive); // Decref if not put in tuple
+        python.decref(scope); // Decref if not put in tuple
         python.decref(args.?);
         handlePythonError();
+        python.og.PyGILState_Release(gil_state); // Release GIL
         return PythonError.RuntimeError;
     }
+    // Tuple `args` now owns the incref'd references.
+    // We release the GIL here because create_app_coroutine_for_event_loop will acquire it again.
+    python.og.PyGILState_Release(gil_state);
+    // --- GIL RELEASED ---
 
-    const future = try create_app_coroutine_for_event_loop(app, args, loop);
+    // This function handles its own GIL management for the run_coroutine_threadsafe call
+    const future = create_app_coroutine_for_event_loop(app, args.?, loop) catch |err| {
+        // If creation failed, args tuple might still exist, but its items were
+        // likely already handled (decref'd) inside the failing function or weren't set.
+        // The original scope, receive, send were incref'd above but not put in the tuple
+        // if SetItem failed. If SetItem succeeded, the called function handles decref.
+        // Let's decref args itself here if it wasn't null.
+        // We don't decref scope/receive/send here, assume create_app handles them on error.
+        if (args != null) python.decref(args.?);
+        return err; // Propagate the error
+    };
+    // If create_app succeeded, it consumed the `args` tuple, no need to decref args here.
+    // `future` is a new reference.
+
+    // --- GIL NEEDED FOR result() ---
+    gil_state = python.og.PyGILState_Ensure(); // Acquire GIL
 
     // Get the result() method from the future
-    const result_method = base.getAttribute(future, "result") catch {
+    const result_method = base.getAttribute(future, "result") catch |err| {
+        python.decref(future); // decref future on error getting attribute
         handlePythonError();
-        return PythonError.RuntimeError;
+        python.og.PyGILState_Release(gil_state); // Release GIL
+        return err; // Propagate error appropriately
     };
-    defer python.decref(result_method);
+    // result_method is a new reference
 
-    // Call result() to get the actual result
-    const result = python.og.PyObject_CallObject(result_method, python.og.PyTuple_New(0));
+    // Call result() to get the actual result (and potentially raise Python exceptions)
+    const result = python.og.PyObject_CallObject(result_method, python.og.PyTuple_New(0)); // Empty tuple for args
+
+    python.decref(result_method); // Done with result_method reference
+
     if (result == null) {
-        python.decref(future);
-        handlePythonError();
+        python.decref(future); // decref future on error calling result()
+        handlePythonError(); // Check if Python exception was set
+        python.og.PyGILState_Release(gil_state); // Release GIL
         return PythonError.CallFailed;
     }
+    // result is a new reference
     std.debug.print("DEBUG: Got result from future: {*}\n", .{result.?});
 
-    // Clean up
-    python.decref(future);
+    // Clean up the final result and future (new references)
     python.decref(result.?);
+    python.decref(future);
+
+    python.og.PyGILState_Release(gil_state); // Release GIL
+    // --- GIL RELEASED ---
 
     std.debug.print("DEBUG: ASGI application call completed\n", .{});
     return;
