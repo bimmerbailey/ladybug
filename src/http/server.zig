@@ -29,7 +29,11 @@ pub const Server = struct {
         if (self.running) return;
 
         const address = try std.net.Address.parseIp(self.config.host, self.config.port);
-        self.listener = try address.listen(.{ .reuse_address = true });
+        self.listener = try address.listen(.{
+            .reuse_address = true,
+            // Set non-blocking mode
+            .force_nonblocking = true,
+        });
         self.running = true;
 
         std.debug.print("HTTP server listening on http://{s}:{d}\n", .{ self.config.host, self.config.port });
@@ -48,13 +52,19 @@ pub const Server = struct {
         std.debug.print("HTTP server stopped\n", .{});
     }
 
-    /// Accept a connection from the listener
+    /// Accept a connection from the listener with timeout
     pub fn accept(self: *Server) !net.Server.Connection {
         if (!self.running or self.listener == null) {
             return error.ServerNotRunning;
         }
 
-        return try self.listener.?.accept();
+        // Try to accept a connection
+        return self.listener.?.accept() catch |err| {
+            switch (err) {
+                error.WouldBlock => return error.WouldBlock,
+                else => return err,
+            }
+        };
     }
 };
 

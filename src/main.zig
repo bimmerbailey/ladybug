@@ -111,6 +111,21 @@ fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     logger.info("Shutting down...", .{});
     pool.stop();
 }
+// Global variable for signal handling
+var global_shutdown_flag: bool = false;
+
+const AnotherSignalHandler = struct {
+    flag: *bool,
+
+    fn handle(sig: c_int, handler_ptr: ?*anyopaque) callconv(.C) void {
+        std.debug.print("DEBUG: Singal handler\n", .{});
+        _ = sig;
+        if (handler_ptr) |ptr| {
+            const self = @as(*@This(), @ptrCast(ptr));
+            self.flag.* = true; // Set the flag to true when the signal is received
+        }
+    }
+};
 
 fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger, module_name: []const u8, app_name: []const u8) !void {
     std.debug.print("DEBUG: Running worker\n", .{});
@@ -120,8 +135,12 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     defer python.base.finalize();
 
     // Create and set up the event loop
-    const event_loop = try python.event_loop.createAndSetEventLoop();
-    defer python.base.decref(event_loop);
+    const event_loop_ctx = try python.event_loop.createAndSetEventLoop();
+    defer {
+        python.event_loop.stopEventLoop(event_loop_ctx) catch |err| {
+            logger.err("Error stopping event loop: {!}", .{err});
+        };
+    }
 
     // Load ASGI application
     logger.info("Loading ASGI application from {s}:{s}", .{ module_name, app_name });
@@ -139,6 +158,25 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     var server = http.Server.init(allocator, server_config);
     defer server.stop();
 
+    const internal_handler = struct {
+        fn internal_handler(sig: c_int) callconv(.C) void {
+            // try python.event_loop.stopEventLoop(event_loop_ctx) catch |err| {
+            //     logger.err("Error stopping event loop: {!}", .{err});
+            // };
+            std.debug.print("DEBUG: Received signal {}\n", .{sig});
+            global_shutdown_flag = true;
+            std.debug.print("DEBUG: Shutting down server, flag: {}\n", .{global_shutdown_flag});
+        }
+    }.internal_handler;
+
+    const act = std.posix.Sigaction{
+        .handler = .{ .handler = internal_handler },
+        .mask = std.posix.empty_sigset,
+        .flags = 0,
+    };
+
+    std.posix.sigaction(std.posix.SIG.INT, &act, null);
+
     // Start the server
     try server.start();
     logger.info("Listening on http://{s}:{d}", .{ server_config.host, server_config.port });
@@ -148,29 +186,39 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     if (!std.mem.eql(u8, options.lifespan, "off")) {
         std.debug.print("DEBUG: Starting lifespan protocol\n", .{});
         // TODO: Handle event loop?
-        try handleLifespan(allocator, app, logger, event_loop);
+        try handleLifespan(allocator, app, logger, event_loop_ctx.loop);
     }
+    logger.info("Finished lifespan protocol\n", .{});
 
-    // TODO: If more than one worker use multiprocessing
-    // Accept and handle connections
-    while (true) {
+    // Main server loop
+    while (!global_shutdown_flag) {
         const conn = server.accept() catch |err| {
-            logger.err("Error accepting connection: {!}", .{err});
-            continue;
+            switch (err) {
+                error.WouldBlock => {
+                    // No connection available, sleep briefly and check shutdown flag
+                    std.time.sleep(10 * std.time.ns_per_ms); // 10ms sleep
+                    continue;
+                },
+                else => {
+                    logger.err("Error accepting connection: {!}", .{err});
+                    continue;
+                },
+            }
         };
+
+        if (global_shutdown_flag) {
+            break;
+        }
 
         // Copy the connection for the thread
         const conn_copy = try allocator.create(std.net.Server.Connection);
         conn_copy.* = conn;
 
         // TODO: Handle event loop?
-        try handleConnection(allocator, conn_copy, app, logger, event_loop);
-        // Process the request in a separate thread
-        // const thread = try std.Thread.spawn(.{}, handleConnection, .{
-        //     allocator, conn_copy, app, &logger,
-        // });
-        // thread.detach();
+        try handleConnection(allocator, conn_copy, app, logger, event_loop_ctx.loop);
     }
+
+    logger.info("Shutting down server...", .{});
 }
 
 /// Handle an HTTP connection
@@ -389,6 +437,7 @@ fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *
             break;
         }
     }
+    std.debug.print("DEBUG: Lifespan complete\n", .{});
 }
 
 /// Call the ASGI application for lifespan protocol

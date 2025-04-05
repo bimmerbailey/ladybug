@@ -107,8 +107,14 @@ pub fn get_event_loop() !*PyObject {
     return @as(*PyObject, loop);
 }
 
+/// Structure to hold event loop and its thread
+pub const EventLoopContext = struct {
+    loop: *PyObject,
+    thread: *PyObject,
+};
+
 /// Create and set up the Python event loop for ASGI applications
-pub fn createAndSetEventLoop() !*python.PyObject {
+pub fn createAndSetEventLoop() !EventLoopContext {
     // Import asyncio
     const asyncio = try importModule("asyncio");
     defer python.decref(asyncio);
@@ -146,13 +152,9 @@ pub fn createAndSetEventLoop() !*python.PyObject {
     }
     python.decref(result.?);
 
-    // TODO: Look into using a zig thread
-    // Import threading and concurrent.futures
+    // Import threading
     const threading = try importModule("threading");
     defer python.decref(threading);
-
-    // const concurrent = try importModule("concurrent.futures");
-    // defer python.decref(concurrent);
 
     // Get the run_forever function
     const run_forever_func = try getAttribute(loop.?, "run_forever");
@@ -176,11 +178,11 @@ pub fn createAndSetEventLoop() !*python.PyObject {
         return PythonError.RuntimeError;
     }
 
-    // Add daemon=True
+    // Add daemon=False - Changed to False to ensure proper cleanup
     const daemon_key = try toPyString("daemon");
     defer python.decref(daemon_key);
-    const py_true = python.getPyTrue();
-    if (python.og.PyDict_SetItem(kwargs.?, daemon_key, py_true) < 0) {
+    const py_false = python.getPyFalse();
+    if (python.og.PyDict_SetItem(kwargs.?, daemon_key, py_false) < 0) {
         return PythonError.RuntimeError;
     }
 
@@ -198,7 +200,6 @@ pub fn createAndSetEventLoop() !*python.PyObject {
     if (py_thread == null) {
         return PythonError.RuntimeError;
     }
-    defer python.decref(py_thread.?);
 
     // Start the thread
     const start_method = try getAttribute(py_thread.?, "start");
@@ -206,6 +207,7 @@ pub fn createAndSetEventLoop() !*python.PyObject {
 
     const start_result = python.og.PyObject_CallObject(start_method, null);
     if (start_result == null) {
+        python.decref(py_thread.?);
         return PythonError.RuntimeError;
     }
     python.decref(start_result.?);
@@ -219,6 +221,7 @@ pub fn createAndSetEventLoop() !*python.PyObject {
 
     const is_running_result = python.og.PyObject_CallObject(is_running_func, null);
     if (is_running_result == null) {
+        python.decref(py_thread.?);
         return PythonError.RuntimeError;
     }
     defer python.decref(is_running_result.?);
@@ -245,5 +248,114 @@ pub fn createAndSetEventLoop() !*python.PyObject {
     }
 
     std.debug.print("DEBUG: Event loop created and started in background thread\n", .{});
-    return loop.?;
+    return EventLoopContext{ .loop = loop.?, .thread = py_thread.? };
+}
+
+/// Stop the event loop and clean up resources
+pub fn stopEventLoop(ctx: EventLoopContext) !void {
+    // Acquire GIL for Python API calls
+    const gil_state = python.og.PyGILState_Ensure();
+    defer python.og.PyGILState_Release(gil_state);
+
+    // Get call_soon_threadsafe method
+    const call_soon = try getAttribute(ctx.loop, "call_soon_threadsafe");
+    defer python.decref(call_soon);
+
+    // Get stop method
+    const stop_func = try getAttribute(ctx.loop, "stop");
+    defer python.decref(stop_func);
+
+    // Schedule stop using call_soon_threadsafe
+    const call_args = python.og.PyTuple_New(1);
+    if (call_args == null) {
+        return PythonError.RuntimeError;
+    }
+    defer python.decref(call_args.?);
+
+    if (python.og.PyTuple_SetItem(call_args.?, 0, stop_func) < 0) {
+        return PythonError.RuntimeError;
+    }
+
+    const schedule_result = python.og.PyObject_CallObject(call_soon, call_args);
+    if (schedule_result == null) {
+        return PythonError.RuntimeError;
+    }
+    python.decref(schedule_result.?);
+
+    // Wait for the loop to stop (with timeout)
+    const is_running_func = try getAttribute(ctx.loop, "is_running");
+    defer python.decref(is_running_func);
+
+    var attempts: u32 = 0;
+    const max_attempts: u32 = 100; // 1 second total (10ms * 100)
+
+    while (attempts < max_attempts) : (attempts += 1) {
+        const is_running_result = python.og.PyObject_CallObject(is_running_func, null);
+        if (is_running_result == null) {
+            return PythonError.RuntimeError;
+        }
+        defer python.decref(is_running_result.?);
+
+        const is_running = python.og.PyObject_IsTrue(is_running_result.?);
+        if (is_running <= 0) {
+            std.debug.print("DEBUG: Event loop has stopped\n", .{});
+            break;
+        }
+
+        // Release GIL while sleeping
+        python.og.PyGILState_Release(gil_state);
+        std.time.sleep(10 * std.time.ns_per_ms); // 10ms sleep
+        _ = python.og.PyGILState_Ensure();
+    }
+
+    if (attempts >= max_attempts) {
+        std.debug.print("WARNING: Event loop did not stop after timeout\n", .{});
+    }
+
+    // Now close the loop
+    const close_func = try getAttribute(ctx.loop, "close");
+    defer python.decref(close_func);
+
+    const close_result = python.og.PyObject_CallObject(close_func, null);
+    if (close_result == null) {
+        std.debug.print("DEBUG: Error closing event loop\n", .{});
+        return PythonError.RuntimeError;
+    }
+    python.decref(close_result.?);
+    std.debug.print("DEBUG: Closed loop\n", .{});
+
+    // Get thread join method
+    const join_func = try getAttribute(ctx.thread, "join");
+    defer python.decref(join_func);
+
+    // Join the thread with a timeout
+    const timeout_args = python.og.PyTuple_New(1);
+    if (timeout_args == null) {
+        return PythonError.RuntimeError;
+    }
+    defer python.decref(timeout_args.?);
+
+    // Set timeout to 1 second
+    const timeout = python.og.PyFloat_FromDouble(1.0);
+    if (timeout == null) {
+        return PythonError.RuntimeError;
+    }
+    defer python.decref(timeout.?);
+
+    if (python.og.PyTuple_SetItem(timeout_args.?, 0, timeout.?) < 0) {
+        return PythonError.RuntimeError;
+    }
+
+    // Join the thread
+    const join_result = python.og.PyObject_CallObject(join_func, timeout_args.?);
+    if (join_result == null) {
+        std.debug.print("DEBUG: Error joining thread\n", .{});
+        return PythonError.RuntimeError;
+    }
+    python.decref(join_result.?);
+    std.debug.print("DEBUG: Joined thread\n", .{});
+
+    // Cleanup references
+    python.decref(ctx.loop);
+    python.decref(ctx.thread);
 }
