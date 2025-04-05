@@ -112,6 +112,7 @@ pub extern "c" fn PyObject_NewVar(type: *PyTypeObject, size: og.Py_ssize_t) ?*Py
 pub extern "c" fn PyObject_Init(obj: *PyObject, type: *PyTypeObject) *PyObject;
 pub extern "c" fn PyObject_Malloc(size: usize) ?*anyopaque;
 pub extern "c" fn PyObject_Del(obj: *PyObject) void;
+pub extern "c" fn zig_py_object_new(type: *PyTypeObject) ?*PyObject;
 
 // Bytes operations
 pub extern "c" fn PyBytes_AsStringAndSize(obj: *PyObject, buffer: *[*c]u8, length: *c_long) c_int;

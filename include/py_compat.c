@@ -92,4 +92,9 @@ int zig_py_tuple_check(PyObject* obj) {
 
 int zig_py_unicode_check(PyObject* obj) {
     return PyUnicode_Check(obj);
+}
+
+// Wrapper for PyObject_New to work around Zig C ABI issues
+PyObject* zig_py_object_new(PyTypeObject* type) {
+    return PyObject_New(void*, type);
 } 
