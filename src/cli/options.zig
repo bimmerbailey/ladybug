@@ -191,6 +191,7 @@ pub const Options = struct {
 
     /// Clean up allocated resources
     pub fn deinit(self: *Options, allocator: Allocator) void {
+        std.debug.print("Deinitializing options\n", .{});
         if (self.reload_dirs) |dirs| {
             for (dirs) |dir| {
                 allocator.free(dir);
@@ -211,6 +212,8 @@ pub const Options = struct {
             }
             allocator.free(excludes);
         }
+
+        allocator.free(self.app);
     }
 };
 
