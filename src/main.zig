@@ -254,12 +254,21 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
 
     // Convert headers to ASGI format
     var headers_list = std.ArrayList([2][]const u8).init(allocator);
-    defer headers_list.deinit();
+    defer {
+        // Free each header key and value pair
+        for (headers_list.items) |header| {
+            allocator.free(header[0]);
+            allocator.free(header[1]);
+        }
+        headers_list.deinit();
+    }
 
     var headers_iter = request.headers.iterator();
     while (headers_iter.next()) |header| {
+        const key_buf = try allocator.alloc(u8, header.key_ptr.len);
+        _ = std.ascii.lowerString(key_buf, header.key_ptr.*);
         try headers_list.append([2][]const u8{
-            try allocator.dupe(u8, std.ascii.lowerString(allocator.alloc(u8, header.key_ptr.len) catch continue, header.key_ptr.*)),
+            key_buf,
             try allocator.dupe(u8, header.value_ptr.*),
         });
     }

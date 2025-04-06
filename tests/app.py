@@ -35,11 +35,13 @@ async def app(scope, receive, send):
             "type": "error",
             "message": f"Unsupported scope type: {scope['type']}"
         })
+    print("IN PYTHON: App finished")
 
 async def handle_http(scope, receive, send):
     """
     Handle an HTTP request and return a response with request details.
     """
+    print("IN PYTHON: Handling HTTP request")
     # Get the request details
     request = await receive()
     print(f"Received HTTP request: {request}")
@@ -53,7 +55,7 @@ async def handle_http(scope, receive, send):
     # Create a simple HTML response with request details
     path = scope.get("path", "")
     method = scope.get("method", "")
-    query_string = scope.get("query_string", b"").decode("utf-8")
+    query_string = scope.get("query_string", b"").encode("utf-8")
     
     body = f"""
     <!DOCTYPE html>
@@ -79,7 +81,7 @@ async def handle_http(scope, receive, send):
         </ul>
         
         <h2>Full Scope:</h2>
-        <pre>{scope}</pre>
+        <p>{scope}</p>
     </body>
     </html>
     """.encode("utf-8")
@@ -102,6 +104,7 @@ async def handle_websocket(scope, receive, send):
     """
     Handle WebSocket connections with echo functionality.
     """
+    print("IN PYTHON: Handling WebSocket connection")
     # Accept connection
     event = await receive()
     if event["type"] == "websocket.connect":
@@ -141,12 +144,13 @@ async def handle_lifespan(scope, receive, send):
     """
     Handle server lifespan events.
     """
-    while True:
-        message = await receive()
-        if message["type"] == "lifespan.startup":
-            print("IN PYTHON: Server is starting up")
-            await send({"type": "lifespan.startup.complete"})
-        elif message["type"] == "lifespan.shutdown":
-            print("Server is shutting down")
-            await send({"type": "lifespan.shutdown.complete"})
-            break 
+    print("IN PYTHON: Handling lifespan")
+    message = await receive()
+    if message["type"] == "lifespan.startup":
+        print("IN PYTHON: Server is starting up")
+        await send({"type": "lifespan.startup.complete"})
+        print("IN PYTHON: Server startup complete")
+    elif message["type"] == "lifespan.shutdown":
+        print("Server is shutting down")
+        await send({"type": "lifespan.shutdown.complete"})
+        print("IN PYTHON: Server shutdown complete")
