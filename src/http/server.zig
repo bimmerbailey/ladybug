@@ -2,6 +2,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const net = std.net;
 
+// UVICORN PARITY: Add TLS/SSL configuration options (cert_file, key_file, ca_certs)
+// UVICORN PARITY: Add HTTP/2 configuration options and protocol selection
+// UVICORN PARITY: Add WebSocket configuration (ping_interval, ping_timeout, max_size)
 /// HTTP Server configuration
 pub const Config = struct {
     host: []const u8 = "127.0.0.1",
@@ -24,6 +27,10 @@ pub const Server = struct {
         };
     }
 
+    // OPTIMIZATION 5: Network I/O - Add TCP_NODELAY, SO_REUSEPORT, and socket buffer tuning
+    // OPTIMIZATION 9: System-Level - Optimize socket buffer sizes (SO_RCVBUF, SO_SNDBUF)
+    // UVICORN PARITY: Add TLS/SSL socket setup and certificate loading
+    // UVICORN PARITY: Add HTTP/2 ALPN negotiation support
     /// Start the server and begin accepting connections
     pub fn start(self: *Server) !void {
         if (self.running) return;
@@ -52,6 +59,9 @@ pub const Server = struct {
         std.debug.print("HTTP server stopped\n", .{});
     }
 
+    // OPTIMIZATION 5: Network I/O - Replace with epoll/kqueue-based event loop
+    // UVICORN PARITY: Add connection limiting and rate limiting support
+    // UVICORN PARITY: Add TLS handshake handling for HTTPS connections
     /// Accept a connection from the listener with timeout
     pub fn accept(self: *Server) !net.Server.Connection {
         if (!self.running or self.listener == null) {
@@ -68,6 +78,12 @@ pub const Server = struct {
     }
 };
 
+// OPTIMIZATION 2: HTTP Parsing - Implement streaming parser for large requests
+// OPTIMIZATION 2: HTTP Parsing - Use zero-copy parsing techniques
+// OPTIMIZATION 1: Memory Management - Use buffer pools instead of allocating 4KB per request
+// UVICORN PARITY: Add HTTP/2 frame parsing and stream multiplexing
+// UVICORN PARITY: Add WebSocket handshake detection and upgrade handling
+// UVICORN PARITY: Add request size limits and timeout handling
 /// Parse an HTTP request from a connection
 pub fn parseRequest(allocator: Allocator, stream: *net.Stream) !Request {
     // Buffer for reading the request
@@ -85,6 +101,9 @@ pub fn parseRequest(allocator: Allocator, stream: *net.Stream) !Request {
     return Request.parse(allocator, buffer[0..bytes_read]);
 }
 
+// UVICORN PARITY: Add support for HTTP/2 pseudo-headers (:method, :path, :scheme, :authority)
+// UVICORN PARITY: Add WebSocket-specific fields (Sec-WebSocket-Key, Sec-WebSocket-Protocol)
+// UVICORN PARITY: Add connection upgrade detection and protocol switching
 /// HTTP request representation
 pub const Request = struct {
     method: []const u8,
@@ -94,6 +113,9 @@ pub const Request = struct {
     headers: std.StringHashMap([]const u8),
     body: ?[]const u8 = null,
 
+    // OPTIMIZATION 2: HTTP Parsing - Implement zero-copy parsing to avoid string duplication
+    // OPTIMIZATION 1: Memory Management - Use string interning for common header names
+    // OPTIMIZATION 6: Data Structure - Use more efficient header storage (arrays vs hashmaps)
     /// Parse a raw HTTP request into a Request object
     pub fn parse(allocator: Allocator, buffer: []const u8) !Request {
         var result = Request{
@@ -207,6 +229,7 @@ pub const Response = struct {
     body: ?[]const u8,
     allocator: Allocator,
 
+    // OPTIMIZATION 1: Memory Management - Use object pools for Response objects
     /// Create a new response with default values
     pub fn init(allocator: Allocator) Response {
         std.debug.print("DEBUG: Initializing response\n", .{});
@@ -218,6 +241,7 @@ pub const Response = struct {
         };
     }
 
+    // OPTIMIZATION 1: Memory Management - Avoid string duplication for headers
     /// Set a header on the response
     pub fn setHeader(self: *Response, name: []const u8, value: []const u8) !void {
         const name_dup = try self.allocator.dupe(u8, name);
@@ -234,6 +258,11 @@ pub const Response = struct {
         self.body = try self.allocator.dupe(u8, body);
     }
 
+    // OPTIMIZATION 1: Memory Management - Use buffer pools for response building
+    // OPTIMIZATION 5: Network I/O - Implement vectored I/O for better performance
+    // UVICORN PARITY: Add HTTP/2 frame formatting and stream management
+    // UVICORN PARITY: Add automatic security headers (CORS, CSP, HSTS) injection
+    // UVICORN PARITY: Add response compression (gzip, brotli) support
     /// Send the response to the given stream
     pub fn send(self: *const Response, stream: *net.Stream) !void {
         // Create a buffer for the response
@@ -301,6 +330,8 @@ pub const AsgiScope = struct {
         };
     }
 
+    // OPTIMIZATION 1: Memory Management - Use object pools for ASGI scopes
+    // OPTIMIZATION 6: Data Structure - Use more efficient scope representation
     /// Generate ASGI scope from an HTTP request
     pub fn fromRequest(allocator: Allocator, request: *const Request) !AsgiScope {
         var scope = AsgiScope.init(allocator);
@@ -362,6 +393,7 @@ pub const AsgiScope = struct {
         self.scope.deinit();
     }
 
+    // OPTIMIZATION 6: Data Structure - Implement streaming JSON serialization
     pub fn toJsonValue(self: *const AsgiScope) !std.json.Value {
         // Create a JSON object
         var json_object = std.json.ObjectMap.init(self.allocator);

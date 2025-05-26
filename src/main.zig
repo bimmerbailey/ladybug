@@ -11,6 +11,10 @@ const cli = lib.cli;
 const utils = lib.utils;
 const builtin = @import("builtin");
 
+// OPTIMIZATION 1: Memory Management - Use arena allocator for request-scoped allocations
+// OPTIMIZATION 7: Compilation - Ensure this is compiled with ReleaseFast for production
+// UVICORN PARITY: Add support for configuration files (YAML/JSON), environment file loading (.env)
+// UVICORN PARITY: Add metrics collection and health check endpoints
 pub fn main() !void {
     // Set up allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -58,6 +62,9 @@ const SignalHandler = struct {
     }
 };
 
+// OPTIMIZATION 10: Monitoring - Add performance metrics and health monitoring for master process
+// UVICORN PARITY: Add graceful worker restarts, better signal handling for SIGTERM/SIGINT/SIGHUP
+// UVICORN PARITY: Add worker health monitoring and automatic restart on failures
 /// Run as master process, managing worker processes
 fn runMaster(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger) !void {
     logger.info("Running in master mode with {d} workers", .{options.workers});
@@ -127,6 +134,12 @@ const AnotherSignalHandler = struct {
     }
 };
 
+// OPTIMIZATION 4: Python Integration - Optimize Python interpreter initialization and reuse
+// OPTIMIZATION 5: Network I/O - Implement non-blocking I/O and connection pooling
+// OPTIMIZATION 3: Concurrency - Improve worker process management and load balancing
+// OPTIMIZATION 10: Monitoring - Remove debug prints from hot paths for production
+// UVICORN PARITY: Add auto-reload functionality with file watching for development mode
+// UVICORN PARITY: Add access logging with configurable formats and structured output
 fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const utils.Logger, module_name: []const u8, app_name: []const u8) !void {
     std.debug.print("DEBUG: Running worker\n", .{});
 
@@ -190,6 +203,8 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     }
     logger.info("Finished lifespan protocol\n", .{});
 
+    // OPTIMIZATION 5: Network I/O - Replace blocking accept() with epoll/kqueue event loop
+    // OPTIMIZATION 3: Concurrency - This main loop should dispatch to worker threads
     // Main server loop
     while (!global_shutdown_flag) {
         const conn = server.accept() catch |err| {
@@ -207,6 +222,7 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
         };
 
         if (global_shutdown_flag) {
+            // TODO: send shutdown message to application
             break;
         }
 
@@ -221,6 +237,14 @@ fn runWorker(allocator: std.mem.Allocator, options: *cli.Options, logger: *const
     logger.info("Shutting down server...", .{});
 }
 
+// OPTIMIZATION 1: Memory Management - Use memory pools for connection objects
+// OPTIMIZATION 2: HTTP Parsing - Implement zero-copy parsing and streaming
+// OPTIMIZATION 4: Python Integration - Cache Python objects and reduce transitions
+// OPTIMIZATION 8: Protocol-Specific - Optimize ASGI message handling
+// UVICORN PARITY: Add WebSocket connection upgrade handling and protocol support
+// UVICORN PARITY: Add HTTP/2 protocol support and connection multiplexing
+// UVICORN PARITY: Add middleware chain execution for ASGI applications
+// UVICORN PARITY: Add request/response logging and metrics collection
 /// Handle an HTTP connection
 fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Connection, app: *python.PyObject, logger: *const utils.Logger, loop: *python.PyObject) !void {
     // Make sure we clean up the connection and memory
@@ -245,6 +269,7 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     var from_app = asgi.MessageQueue.init(allocator);
     defer from_app.deinit();
 
+    // TODO: Get actual addresses
     // Extract client and server addresses
     // Simple approach to avoid union type issues
     const client_addr = try allocator.dupe(u8, "127.0.0.1");
@@ -252,6 +277,8 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     const server_addr = try allocator.dupe(u8, "127.0.0.1");
     defer allocator.free(server_addr);
 
+    // OPTIMIZATION 1: Memory Management - Avoid allocating for each header
+    // OPTIMIZATION 6: Data Structure - Use more efficient header representation
     // Convert headers to ASGI format
     var headers_list = std.ArrayList([2][]const u8).init(allocator);
     defer {
@@ -310,6 +337,7 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
         response_headers.deinit();
     }
 
+    // OPTIMIZATION 8: Protocol-Specific - Batch ASGI messages for better performance
     while (true) {
         const event = try from_app.receive();
         defer asgi.jsonValueDeinit(event, allocator);
@@ -380,6 +408,10 @@ fn handleConnection(allocator: std.mem.Allocator, connection: *std.net.Server.Co
     }
 }
 
+// OPTIMIZATION 8: Protocol-Specific - Optimize lifespan protocol for faster startup
+// UVICORN PARITY: Add proper error handling for lifespan startup/shutdown failures
+// UVICORN PARITY: Add timeout handling for lifespan events
+// UVICORN PARITY: Add graceful shutdown coordination with active connections
 /// Handle the lifespan protocol for startup/shutdown events
 fn handleLifespan(allocator: std.mem.Allocator, app: *python.PyObject, logger: *const utils.Logger, loop: *python.PyObject) !void {
     logger.debug("Running lifespan protocol", .{});

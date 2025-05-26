@@ -15,6 +15,10 @@ const decref = base.decref;
 const handlePythonError = base.handlePythonError;
 const PythonError = base.PythonError;
 
+// OPTIMIZATION 4: Python Integration - Cache loaded applications to avoid repeated imports
+// UVICORN PARITY: Add application factory support (callable that returns ASGI app)
+// UVICORN PARITY: Add module reloading support for development mode
+// UVICORN PARITY: Add application validation and ASGI version checking
 /// Load a Python ASGI application
 pub fn loadApplication(module_path: []const u8, app_name: []const u8) !*python.PyObject {
     std.debug.print("DEBUG: Loading application\n", .{});
@@ -58,6 +62,8 @@ fn create_asgi_callable_object(name: [*c]const u8, doc: [*c]const u8, vectorcall
     };
 }
 
+// OPTIMIZATION 4: Python Integration - Reduce Python object creation/destruction overhead
+// OPTIMIZATION 3: Concurrency - Optimize thread state management for better performance
 pub fn asgi_receive_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
     _ = nargs;
     _ = args;
@@ -123,6 +129,7 @@ var ReceiveType = PyTypeObject{
     .tp_doc = python.og.PyDoc_STR("Receive a message from the queue"),
 };
 
+// OPTIMIZATION 4: Python Integration - Cache callable objects to avoid repeated creation
 pub fn create_receive_vectorcall_callable(queue: *protocol.MessageQueue, loop: *PyObject) !*python.PyObject {
     if (python.og.PyType_Ready(&ReceiveType) < 0) return error.PythonTypeInitFailed;
 
@@ -139,6 +146,7 @@ pub fn create_receive_vectorcall_callable(queue: *protocol.MessageQueue, loop: *
     return @as(*python.PyObject, @ptrCast(receive_obj));
 }
 
+// OPTIMIZATION 4: Python Integration - Optimize message serialization between Zig and Python
 pub fn asgi_send_vectorcall(callable: [*c]?*python.PyObject, args: [*c]?*python.PyObject, nargs: usize) callconv(.C) *python.PyObject {
     _ = nargs;
 
@@ -348,6 +356,10 @@ pub fn create_asgi_future_for_event_loop(value: *PyObject, loop: *PyObject) !*Py
     return @as(*PyObject, future);
 }
 
+// UVICORN PARITY: Add middleware chain execution before calling main application
+// UVICORN PARITY: Add request/response timing and metrics collection
+// UVICORN PARITY: Add exception handling and error response generation
+// UVICORN PARITY: Add application timeout handling and cancellation
 /// Call an ASGI application with scope, receive, and send
 pub fn callAsgiApplication(app: *PyObject, scope: *PyObject, receive: *PyObject, send: *PyObject, loop: *PyObject) !void {
     std.debug.print("\nDEBUG: Calling ASGI application\n", .{});

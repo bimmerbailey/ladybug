@@ -1,6 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// UVICORN PARITY: Add missing CLI options (--env-file, --log-config, --date-header-field)
+// UVICORN PARITY: Add HTTP/2 specific options (--h2, --http2-max-concurrent-streams)
+// UVICORN PARITY: Add WebSocket options (--ws-ping-interval, --ws-ping-timeout, --ws-max-size)
+// UVICORN PARITY: Add development options (--reload-include, --reload-exclude patterns)
 /// CLI options for the server
 pub const Options = struct {
     // Server options
@@ -56,6 +60,9 @@ pub const Options = struct {
         return Options{};
     }
 
+    // UVICORN PARITY: Add parsing for all missing Uvicorn CLI options
+    // UVICORN PARITY: Add validation for SSL certificate files and TLS options
+    // UVICORN PARITY: Add support for configuration file loading (YAML/JSON)
     /// Parse command line arguments
     pub fn parseArgs(self: *Options, allocator: Allocator, args: []const []const u8) !void {
         var i: usize = 1; // Skip the program name
@@ -142,6 +149,8 @@ pub const Options = struct {
         }
     }
 
+    // UVICORN PARITY: Add complete help text matching Uvicorn's CLI options
+    // UVICORN PARITY: Add examples and better formatting for help output
     /// Print usage information
     pub fn printUsage(self: *Options, allocator: Allocator) !void {
         _ = self; // Mark as used (removing parameter would break existing call sites)
