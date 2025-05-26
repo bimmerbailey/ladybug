@@ -1,5 +1,15 @@
 const std = @import("std");
 
+// UVICORN PARITY: Additional modules needed for full compatibility:
+// - src/tls/ (TLS/SSL support with certificate management)
+// - src/http2/ (HTTP/2 protocol implementation)
+// - src/websocket/ (Complete WebSocket protocol handler)
+// - src/middleware/ (ASGI middleware chain support)
+// - src/config/ (Configuration file parsing - YAML/JSON)
+// - src/reload/ (File watching and auto-reload functionality)
+// - src/metrics/ (Request metrics and health endpoints)
+// - src/compression/ (Response compression - gzip, brotli)
+
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -13,6 +23,8 @@ pub fn build(b: *std.Build) void {
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
+    // OPTIMIZATION 7: Compilation - Use ReleaseFast for production builds
+    // OPTIMIZATION 7: Compilation - Consider enabling LTO (Link Time Optimization)
     const optimize = b.standardOptimizeOption(.{});
 
     // This creates a "module", which represents a collection of source files alongside
@@ -97,6 +109,12 @@ pub fn build(b: *std.Build) void {
     exe.addFrameworkPath(.{ .cwd_relative = python_lib_path });
     exe.linkFramework(python_lib_name);
     exe.linkLibC();
+
+    // OPTIMIZATION 7: Compilation - Add CPU-specific optimizations and strip debug info for production
+    // OPTIMIZATION 7: Compilation - Consider adding -ffast-math for floating point optimizations
+
+    // OPTIMIZATION 7: Compilation - Add CPU-specific optimizations and strip debug info for production
+    // OPTIMIZATION 7: Compilation - Consider adding -ffast-math for floating point optimizations
 
     // Test module needs Python too
     const python_integration_test = b.addTest(.{

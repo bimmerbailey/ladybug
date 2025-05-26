@@ -35,6 +35,10 @@ pub const AsgiVersion = struct {
     spec_version: []const u8 = "2.0",
 };
 
+// OPTIMIZATION 3: Concurrency - Replace mutex-based queue with lock-free alternatives
+// OPTIMIZATION 8: Protocol-Specific - Implement message batching for better throughput
+// UVICORN PARITY: Add message priority handling for different ASGI event types
+// UVICORN PARITY: Add queue size limits and backpressure handling
 /// ASGI Message Queue for communication with the application
 pub const MessageQueue = struct {
     const Self = @This();
@@ -60,6 +64,7 @@ pub const MessageQueue = struct {
         self.condition.signal();
     }
 
+    // OPTIMIZATION 3: Concurrency - Implement non-blocking receive with timeout
     /// Receive a message from the queue, blocking if none is available
     pub fn receive(self: *Self) !json.Value {
         std.debug.print("\nDEBUG: Receive message\n", .{});
@@ -89,6 +94,10 @@ pub const MessageQueue = struct {
     }
 };
 
+// OPTIMIZATION 1: Memory Management - Use object pools for scope creation
+// OPTIMIZATION 6: Data Structure - Use native Zig structs instead of JSON for internal messaging
+// UVICORN PARITY: Add HTTP/2 specific scope fields (stream_id, push_promise support)
+// UVICORN PARITY: Add TLS/SSL connection information to scope
 /// Create an HTTP scope for an ASGI application
 pub fn createHttpScope(allocator: Allocator, server_addr: []const u8, server_port: u16, client_addr: []const u8, client_port: u16, method: []const u8, path: []const u8, query: ?[]const u8, headers: []const [2][]const u8) !json.Value {
     var scope = json.Value{
@@ -147,6 +156,9 @@ pub fn createHttpScope(allocator: Allocator, server_addr: []const u8, server_por
     return scope;
 }
 
+// UVICORN PARITY: Add WebSocket subprotocol negotiation support
+// UVICORN PARITY: Add WebSocket extension support (compression, etc.)
+// UVICORN PARITY: Add WebSocket connection state management
 /// Create a WebSocket scope for an ASGI application
 pub fn createWebSocketScope(allocator: Allocator, server_addr: []const u8, server_port: u16, client_addr: []const u8, client_port: u16, path: []const u8, query: ?[]const u8, headers: []const [2][]const u8) !json.Value {
     var scope = json.Value{
@@ -220,6 +232,7 @@ pub fn createLifespanScope(allocator: Allocator) !json.Value {
     return scope;
 }
 
+// OPTIMIZATION 8: Protocol-Specific - Cache common message types to avoid repeated creation
 /// Create an HTTP request message
 pub fn createHttpRequestMessage(allocator: Allocator, body: ?[]const u8, more_body: bool) !json.Value {
     var message = json.Value{
@@ -279,6 +292,8 @@ pub fn createHttpResponseBodyMessage(allocator: Allocator, body: []const u8, mor
     return message;
 }
 
+// UVICORN PARITY: Add WebSocket ping/pong message handling
+// UVICORN PARITY: Add WebSocket close code and reason support
 /// Create a WebSocket connect message
 pub fn createWebSocketConnectMessage(allocator: Allocator) !json.Value {
     var message = json.Value{

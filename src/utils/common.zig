@@ -1,6 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+// UVICORN PARITY: Add structured logging support (JSON format)
+// UVICORN PARITY: Add access log formatting with customizable fields
+// UVICORN PARITY: Add log rotation and file output support
 /// Logger for the application
 pub const Logger = struct {
     level: LogLevel,
@@ -70,6 +73,7 @@ pub const Logger = struct {
         }
     }
 
+    // OPTIMIZATION 10: Monitoring - Use compile-time log level filtering to eliminate debug overhead
     /// Log a message with the given level
     fn log(self: Logger, level: LogLevel, comptime fmt: []const u8, args: anytype) void {
         const stderr = std.io.getStdErr().writer();
@@ -168,6 +172,11 @@ pub const Worker = struct {
     };
 };
 
+// OPTIMIZATION 9: System-Level - Implement CPU affinity and NUMA awareness for workers
+// OPTIMIZATION 3: Concurrency - Improve worker load balancing and process management
+// UVICORN PARITY: Add worker preloading support for faster startup
+// UVICORN PARITY: Add worker memory monitoring and automatic restart on memory leaks
+// UVICORN PARITY: Add graceful worker shutdown with connection draining
 /// Worker pool for managing multiple worker processes
 pub const WorkerPool = struct {
     const Self = @This();
@@ -198,6 +207,7 @@ pub const WorkerPool = struct {
         }
     }
 
+    // OPTIMIZATION 9: System-Level - Pin workers to specific CPU cores for better cache locality
     /// Start a single worker
     fn startWorker(self: *Self) !void {
         // Create argv for the worker process
@@ -268,6 +278,8 @@ pub const WorkerPool = struct {
         }
     }
 
+    // UVICORN PARITY: Add graceful shutdown with configurable timeout
+    // UVICORN PARITY: Add connection draining before worker termination
     /// Stop all worker processes gracefully
     pub fn stop(self: *Self) void {
         const builtin = @import("builtin");
@@ -305,6 +317,7 @@ pub const WorkerPool = struct {
         }
     }
 
+    // OPTIMIZATION 10: Monitoring - Add performance metrics and health checks for workers
     /// Check if any workers need to be restarted
     pub fn check(self: *Self) !void {
         const builtin = @import("builtin");
