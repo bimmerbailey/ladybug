@@ -5,8 +5,8 @@ const thread = std.Thread;
 pub const base = @import("bases.zig");
 pub const event_loop = @import("event_loop.zig");
 
-// Import ASGI protocol module - use the module name defined in build.zig
-const protocol = @import("protocol");
+// Import ASGI protocol module using relative import
+const protocol = @import("../asgi/protocol.zig");
 
 // Export the PyObject type for external use
 pub const PyObject = python.og.PyObject;

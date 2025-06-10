@@ -94,6 +94,95 @@ pub const MessageQueue = struct {
     }
 };
 
+/// HTTP/2 Stream-aware Message Queue for per-stream communication
+pub const Http2StreamMessageQueue = struct {
+    const Self = @This();
+
+    const StreamQueue = struct {
+        messages: std.ArrayList(json.Value),
+        condition: std.Thread.Condition = .{},
+    };
+
+    allocator: Allocator,
+    stream_queues: std.HashMap(u31, StreamQueue, std.hash_map.AutoContext(u31), std.hash_map.default_max_load_percentage),
+    global_mutex: std.Thread.Mutex = .{},
+
+    /// Initialize a new HTTP/2 stream-aware message queue
+    pub fn init(allocator: Allocator) Self {
+        return Self{
+            .allocator = allocator,
+            .stream_queues = std.HashMap(u31, StreamQueue, std.hash_map.AutoContext(u31), std.hash_map.default_max_load_percentage).init(allocator),
+        };
+    }
+
+    /// Create a queue for a specific stream
+    pub fn createStreamQueue(self: *Self, stream_id: u31) !void {
+        self.global_mutex.lock();
+        defer self.global_mutex.unlock();
+
+        if (self.stream_queues.contains(stream_id)) {
+            return; // Queue already exists
+        }
+
+        const stream_queue = StreamQueue{
+            .messages = std.ArrayList(json.Value).init(self.allocator),
+        };
+
+        try self.stream_queues.put(stream_id, stream_queue);
+    }
+
+    /// Push a message to a specific stream queue
+    pub fn pushToStream(self: *Self, stream_id: u31, message: json.Value) !void {
+        self.global_mutex.lock();
+        defer self.global_mutex.unlock();
+
+        var stream_queue = self.stream_queues.getPtr(stream_id) orelse {
+            return error.StreamNotFound;
+        };
+
+        try stream_queue.messages.append(message);
+        stream_queue.condition.signal();
+    }
+
+    /// Receive a message from a specific stream queue
+    pub fn receiveFromStream(self: *Self, stream_id: u31) !json.Value {
+        self.global_mutex.lock();
+        defer self.global_mutex.unlock();
+
+        var stream_queue = self.stream_queues.getPtr(stream_id) orelse {
+            return error.StreamNotFound;
+        };
+
+        while (stream_queue.messages.items.len == 0) {
+            stream_queue.condition.wait(&self.global_mutex);
+        }
+
+        return stream_queue.messages.orderedRemove(0);
+    }
+
+    /// Remove a stream queue when the stream is closed
+    pub fn removeStreamQueue(self: *Self, stream_id: u31) void {
+        self.global_mutex.lock();
+        defer self.global_mutex.unlock();
+
+        if (self.stream_queues.fetchRemove(stream_id)) |kv| {
+            kv.value.messages.deinit();
+        }
+    }
+
+    /// Free all resources associated with the queue
+    pub fn deinit(self: *Self) void {
+        self.global_mutex.lock();
+        defer self.global_mutex.unlock();
+
+        var iterator = self.stream_queues.iterator();
+        while (iterator.next()) |entry| {
+            entry.value_ptr.messages.deinit();
+        }
+        self.stream_queues.deinit();
+    }
+};
+
 // OPTIMIZATION 1: Memory Management - Use object pools for scope creation
 // OPTIMIZATION 6: Data Structure - Use native Zig structs instead of JSON for internal messaging
 // UVICORN PARITY: Add HTTP/2 specific scope fields (stream_id, push_promise support)
@@ -155,6 +244,110 @@ pub fn createHttpScope(allocator: Allocator, server_addr: []const u8, server_por
 
     return scope;
 }
+
+/// Create an HTTP/2 scope for an ASGI application with stream support
+pub fn createHttp2Scope(allocator: Allocator, server_addr: []const u8, server_port: u16, client_addr: []const u8, client_port: u16, method: []const u8, path: []const u8, query: ?[]const u8, headers: []const [2][]const u8, stream_id: u31, scheme: []const u8, authority: ?[]const u8) !json.Value {
+    var scope = json.Value{
+        .object = json.ObjectMap.init(allocator),
+    };
+
+    try scope.object.put("type", json.Value{ .string = "http" });
+
+    var asgi_version = json.Value{
+        .object = json.ObjectMap.init(allocator),
+    };
+    try asgi_version.object.put("version", json.Value{ .string = "3.0" });
+    try asgi_version.object.put("spec_version", json.Value{ .string = "2.0" });
+    try scope.object.put("asgi", asgi_version);
+
+    // HTTP/2 specific fields
+    try scope.object.put("http_version", json.Value{ .string = "2.0" });
+    try scope.object.put("method", json.Value{ .string = method });
+    try scope.object.put("scheme", json.Value{ .string = scheme });
+    try scope.object.put("path", json.Value{ .string = path });
+
+    // Add authority pseudo-header if present
+    if (authority) |auth| {
+        try scope.object.put("authority", json.Value{ .string = auth });
+    }
+
+    // Add stream ID for HTTP/2
+    try scope.object.put("stream_id", json.Value{ .integer = @as(i64, stream_id) });
+
+    if (query) |q| {
+        try scope.object.put("query_string", json.Value{ .string = q });
+    } else {
+        try scope.object.put("query_string", json.Value{ .string = "" });
+    }
+
+    var header_list = json.Value{
+        .array = json.Array.init(allocator),
+    };
+
+    for (headers) |header| {
+        var header_pair = json.Value{
+            .array = json.Array.init(allocator),
+        };
+        try header_pair.array.append(json.Value{ .string = header[0] });
+        try header_pair.array.append(json.Value{ .string = header[1] });
+        try header_list.array.append(header_pair);
+    }
+
+    try scope.object.put("headers", header_list);
+
+    var client = json.Value{
+        .array = json.Array.init(allocator),
+    };
+    try client.array.append(json.Value{ .string = client_addr });
+    try client.array.append(json.Value{ .float = @floatFromInt(client_port) });
+    try scope.object.put("client", client);
+
+    var server = json.Value{
+        .array = json.Array.init(allocator),
+    };
+    try server.array.append(json.Value{ .string = server_addr });
+    try server.array.append(json.Value{ .float = @floatFromInt(server_port) });
+    try scope.object.put("server", server);
+
+    return scope;
+}
+
+/// HTTP/2 pseudo-header utility
+pub const Http2PseudoHeaders = struct {
+    method: ?[]const u8 = null,
+    scheme: ?[]const u8 = null,
+    authority: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+
+    pub fn init() Http2PseudoHeaders {
+        return Http2PseudoHeaders{};
+    }
+
+    pub fn fromHeaders(headers: []const [2][]const u8) Http2PseudoHeaders {
+        var pseudo = Http2PseudoHeaders.init();
+
+        for (headers) |header| {
+            const name = header[0];
+            const value = header[1];
+
+            if (std.mem.eql(u8, name, ":method")) {
+                pseudo.method = value;
+            } else if (std.mem.eql(u8, name, ":scheme")) {
+                pseudo.scheme = value;
+            } else if (std.mem.eql(u8, name, ":authority")) {
+                pseudo.authority = value;
+            } else if (std.mem.eql(u8, name, ":path")) {
+                pseudo.path = value;
+            }
+        }
+
+        return pseudo;
+    }
+
+    pub fn isValid(self: *const Http2PseudoHeaders) bool {
+        return self.method != null and self.scheme != null and self.path != null;
+    }
+};
 
 // UVICORN PARITY: Add WebSocket subprotocol negotiation support
 // UVICORN PARITY: Add WebSocket extension support (compression, etc.)

@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const integration = @import("integration.zig");
-const asgi = @import("protocol");
+const asgi = @import("../asgi/protocol.zig");
 const json = std.json;
 
 // Set up a test allocator

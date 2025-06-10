@@ -12,7 +12,7 @@ const getAttribute = base.getAttribute;
 const toPyString = base.toPyString;
 
 // Import ASGI protocol module - use the module name defined in build.zig
-const protocol = @import("protocol");
+const protocol = @import("../asgi/protocol.zig");
 
 // Export the PyObject type for external use
 pub const PyObject = python.og.PyObject;

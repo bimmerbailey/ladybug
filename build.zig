@@ -98,13 +98,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Add protocol module import
-    const protocol_mod = b.createModule(.{
-        .root_source_file = b.path("src/asgi/protocol.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     // Create a Python wrapper module (only if the wrapper file exists)
     const python_wrapper_mod = b.createModule(.{
         .root_source_file = b.path("src/python/wrapper.zig"),
@@ -115,18 +108,15 @@ pub fn build(b: *std.Build) void {
     // Add include path to wrapper module (C imports need this)
     python_wrapper_mod.addIncludePath(.{ .cwd_relative = python_config.include_path });
     python_wrapper_mod.addIncludePath(.{ .cwd_relative = "include" });
-    python_wrapper_mod.addImport("protocol", protocol_mod);
 
     // Modules can depend on one another using the `std.Build.Module.addImport` function.
     // This is what allows Zig source code to use `@import("foo")` where 'foo' is not a
     // file path. In this case, we set up `exe_mod` to import `lib_mod`.
     exe_mod.addImport("ladybug_lib", lib_mod);
     exe_mod.addImport("python_wrapper", python_wrapper_mod);
-    exe_mod.addImport("protocol", protocol_mod);
 
     // Add imports to library module
     lib_mod.addImport("python_wrapper", python_wrapper_mod);
-    lib_mod.addImport("protocol", protocol_mod);
 
     // Now, we will create a static library based on the module we created above.
     // This creates a `std.Build.Step.Compile`, which is the build step responsible
@@ -196,7 +186,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    python_integration_test.root_module.addImport("protocol", protocol_mod);
     python_integration_test.root_module.addImport("python_wrapper", python_wrapper_mod);
 
     python_integration_test.addIncludePath(.{ .cwd_relative = python_config.include_path });
@@ -270,4 +259,20 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
+
+    // Add HTTP/2 example
+    const http2_example = b.addExecutable(.{
+        .name = "http2_example",
+        .root_source_file = b.path("examples/http2_example.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    http2_example.root_module.addImport("ladybug_lib", lib_mod);
+
+    b.installArtifact(http2_example);
+
+    const run_http2_example = b.addRunArtifact(http2_example);
+    const http2_example_step = b.step("example-http2", "Run HTTP/2 ASGI integration example");
+    http2_example_step.dependOn(&run_http2_example.step);
 }

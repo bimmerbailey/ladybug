@@ -66,7 +66,7 @@ const STATIC_TABLE = [_]HeaderField{
     .{ .name = "www-authenticate", .value = "" },
 };
 
-const HeaderField = struct {
+pub const HeaderField = struct {
     name: []const u8,
     value: []const u8,
 

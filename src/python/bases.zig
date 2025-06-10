@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const python = @import("python_wrapper");
 const thread = std.Thread;
-const protocol = @import("protocol");
+const protocol = @import("../asgi/protocol.zig");
 
 // Export the PyObject type for external use
 pub const PyObject = python.og.PyObject;
