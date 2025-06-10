@@ -259,20 +259,4 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
-
-    // Add HTTP/2 example
-    const http2_example = b.addExecutable(.{
-        .name = "http2_example",
-        .root_source_file = b.path("examples/http2_example.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    http2_example.root_module.addImport("ladybug_lib", lib_mod);
-
-    b.installArtifact(http2_example);
-
-    const run_http2_example = b.addRunArtifact(http2_example);
-    const http2_example_step = b.step("example-http2", "Run HTTP/2 ASGI integration example");
-    http2_example_step.dependOn(&run_http2_example.step);
 }
