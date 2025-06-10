@@ -1,6 +1,5 @@
 const std = @import("std");
 const mem = std.mem;
-const testing = std.testing;
 
 const STATIC_TABLE = [_]HeaderField{
     .{ .name = ":authority", .value = "" },
@@ -205,7 +204,7 @@ pub const HpackDecoder = struct {
         return headers;
     }
 
-    fn decodeInteger(self: *HpackDecoder, data: []const u8, pos: *usize, prefix_bits: u3) !usize {
+    pub fn decodeInteger(self: *HpackDecoder, data: []const u8, pos: *usize, prefix_bits: u3) !usize {
         _ = self;
         if (pos.* >= data.len) return error.InvalidInteger;
 
@@ -253,7 +252,7 @@ pub const HpackDecoder = struct {
         return try self.allocator.dupe(u8, data);
     }
 
-    fn getHeaderField(self: *HpackDecoder, index: usize) !HeaderField {
+    pub fn getHeaderField(self: *HpackDecoder, index: usize) !HeaderField {
         if (index == 0) return error.InvalidIndex;
 
         if (index <= STATIC_TABLE.len) {
@@ -372,7 +371,7 @@ pub const HpackEncoder = struct {
         return false;
     }
 
-    fn encodeInteger(self: *HpackEncoder, output: *std.ArrayList(u8), value: usize, prefix_bits: u3, pattern: u8) !void {
+    pub fn encodeInteger(self: *HpackEncoder, output: *std.ArrayList(u8), value: usize, prefix_bits: u3, pattern: u8) !void {
         _ = self;
         const max_prefix = (@as(usize, 1) << prefix_bits) - 1;
 
@@ -396,86 +395,3 @@ pub const HpackEncoder = struct {
         try output.appendSlice(string);
     }
 };
-
-test "Static table lookup" {
-    const allocator = testing.allocator;
-
-    var decoder = HpackDecoder.init(allocator, 4096);
-    defer decoder.deinit();
-
-    const header = try decoder.getHeaderField(2);
-    defer allocator.free(header.name);
-    defer allocator.free(header.value);
-
-    try testing.expectEqualStrings(":method", header.name);
-    try testing.expectEqualStrings("GET", header.value);
-}
-
-test "Dynamic table operations" {
-    const allocator = testing.allocator;
-
-    var table = DynamicTable.init(allocator, 1000);
-    defer table.deinit();
-
-    try table.add("custom-header", "value1");
-    try table.add("another-header", "value2");
-
-    const first = table.get(0).?;
-    try testing.expectEqualStrings("another-header", first.name);
-    try testing.expectEqualStrings("value2", first.value);
-
-    const second = table.get(1).?;
-    try testing.expectEqualStrings("custom-header", second.name);
-    try testing.expectEqualStrings("value1", second.value);
-}
-
-test "Integer encoding/decoding" {
-    const allocator = testing.allocator;
-
-    var encoder = HpackEncoder.init(allocator, 4096);
-    defer encoder.deinit();
-
-    var decoder = HpackDecoder.init(allocator, 4096);
-    defer decoder.deinit();
-
-    var encoded = std.ArrayList(u8).init(allocator);
-    defer encoded.deinit();
-
-    try encoder.encodeInteger(&encoded, 1337, 5, 0);
-
-    var pos: usize = 0;
-    const decoded = try decoder.decodeInteger(encoded.items, &pos, 5);
-
-    try testing.expect(decoded == 1337);
-}
-
-test "Basic header encoding/decoding" {
-    const allocator = testing.allocator;
-
-    var encoder = HpackEncoder.init(allocator, 4096);
-    defer encoder.deinit();
-
-    var decoder = HpackDecoder.init(allocator, 4096);
-    defer decoder.deinit();
-
-    const headers = [_]HeaderField{
-        .{ .name = ":method", .value = "GET" },
-        .{ .name = ":path", .value = "/test" },
-    };
-
-    const encoded = try encoder.encode(&headers);
-    defer allocator.free(encoded);
-
-    var decoded_headers = try decoder.decode(encoded);
-    defer {
-        for (decoded_headers.items) |header| {
-            allocator.free(header.name);
-            allocator.free(header.value);
-        }
-        decoded_headers.deinit();
-    }
-
-    try testing.expect(decoded_headers.items.len == 2);
-    try testing.expectEqualStrings(":method", decoded_headers.items[0].name);
-    try testing.expectEqualStrings("GET", decoded_headers.items[0].value);
-}
