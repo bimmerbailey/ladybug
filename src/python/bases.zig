@@ -397,7 +397,7 @@ pub fn pyObjectToJson(allocator: Allocator, py_obj: *python.PyObject) !std.json.
 }
 
 /// Function to get Python None for callback function
-fn getNoneForCallback() ?*PyObject {
+pub fn getNoneForCallback() ?*PyObject {
     const none = python.getPyNone();
     python.incref(none);
     return none;
