@@ -20,6 +20,64 @@ This is a work in progress. The project is being developed through "vibe coding"
 - Basic HTTP server implementation
 - More features coming soon!
 
+## Testing
+
+The project includes comprehensive unit tests and integration tests to ensure reliability and correctness.
+
+### Run All Tests
+
+To run all unit tests (recommended):
+```bash
+zig build test
+```
+
+For more detailed test output:
+```bash
+zig build test --summary all
+```
+
+### Available Test Commands
+
+- **`zig build test`** - Runs all unit tests (library and executable tests)
+- **`zig build test-python`** - Runs Python integration tests
+- **`zig build --help`** - Shows all available build steps and options
+
+### Individual Component Tests
+
+You can test specific components by running individual test files:
+
+```bash
+# Test ASGI protocol functionality
+zig test src/asgi/protocol_test.zig
+
+# Test HTTP server functionality  
+zig test src/http/server_test.zig
+
+# Test WebSocket server functionality
+zig test src/websocket/server_test.zig
+
+# Test utility functions
+zig test src/utils/common_test.zig
+
+# Test Python integration
+zig test src/python/integration_test.zig
+```
+
+### Test Structure
+
+- **Unit Tests**: Built into library and executable modules, covering core functionality
+- **Integration Tests**: Separate test files for specific components (HTTP, WebSocket, ASGI)
+- **Python Integration Tests**: Tests for Python-Zig interoperability and ASGI communication
+
+### Running Tests During Development
+
+For continuous testing during development, you can use:
+```bash
+zig build test --watch
+```
+
+This will automatically rerun tests when source files change.
+
 ## Component Overview
 
 ### Main Server Flow
