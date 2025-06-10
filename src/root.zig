@@ -7,11 +7,27 @@ const testing = std.testing;
 // Root file for the ladybug library
 // This exports the library components that can be used by other applications
 
-// HTTP Server
-pub const http = @import("http/server.zig");
+// HTTP Server with HTTP/2 components
+pub const http = struct {
+    pub const server = @import("http/server.zig");
+    pub const h2_frames = @import("http/h2_frames.zig");
+    pub const h2_streams = @import("http/h2_streams.zig");
+    pub const hpack = @import("http/hpack.zig");
+
+    // Re-export commonly used items from server
+    pub const Server = server.Server;
+    pub const Config = server.Config;
+    pub const Request = server.Request;
+    pub const Response = server.Response;
+    pub const AsgiScope = server.AsgiScope;
+    pub const parseRequest = server.parseRequest;
+};
 
 // ASGI protocol implementation
-pub const asgi = @import("protocol");
+pub const asgi = struct {
+    pub const protocol = @import("asgi/protocol.zig");
+    pub const h2_integration = @import("asgi/h2_integration.zig");
+};
 
 // WebSocket support
 pub const websocket = @import("websocket/server.zig");

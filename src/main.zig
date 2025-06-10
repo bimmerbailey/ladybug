@@ -5,7 +5,8 @@
 const std = @import("std");
 const lib = @import("ladybug_lib");
 const http = lib.http;
-const asgi = lib.asgi;
+const asgi = lib.asgi.protocol;
+const h2_asgi = lib.asgi.h2_integration; // HTTP/2 ASGI integration
 const python = lib.python;
 const cli = lib.cli;
 const utils = lib.utils;
